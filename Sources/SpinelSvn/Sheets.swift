@@ -41,7 +41,7 @@ struct ProjectSheetView: View {
 
     var body: some View {
         switch sheet {
-        case let .commit(paths): CommitSheet(wc: wc, initialPaths: Set(paths))
+        case let .commit(paths, picked): CommitSheet(wc: wc, initialPaths: Set(paths), pickedFiles: picked)
         case let .input(r): InputSheet(request: r)
         case let .confirm(r): ConfirmSheet(request: r)
         case let .properties(p): PropertiesSheet(wc: wc, path: p)
@@ -67,15 +67,19 @@ struct CommitSheet: View {
     @FocusState private var messageFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(wc: WorkingCopyModel, initialPaths: Set<String>) {
+    init(wc: WorkingCopyModel, initialPaths: Set<String>, pickedFiles: Bool) {
         self.wc = wc
-        // Unversioned files are offered but not pre-checked unless explicitly selected.
-        let explicit = initialPaths.count < wc.committable.count
-        _checked = State(initialValue: initialPaths.filter { explicit || wc.entries[$0]?.item != .unversioned })
+        // Unversioned files are offered but not pre-checked unless the user picked them.
+        _checked = State(initialValue: initialPaths.filter { pickedFiles || wc.entries[$0]?.item != .unversioned })
     }
 
     private var candidates: [StatusEntry] {
         wc.committable.filter { showUnversioned || $0.item != .unversioned }
+    }
+
+    /// Only files the user can see in the list are counted and committed.
+    private var toCommit: [String] {
+        candidates.map(\.path).filter(checked.contains)
     }
 
     var body: some View {
@@ -125,15 +129,15 @@ struct CommitSheet: View {
             Toggle(L("Keep change sets after commit"), isOn: $keepChangelists)
 
             HStack {
-                Text(String(format: L("%d file(s) selected"), checked.count)).foregroundStyle(.secondary)
+                Text(String(format: L("%d file(s) selected"), toCommit.count)).foregroundStyle(.secondary)
                 Spacer()
                 Button(L("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(L("Commit")) {
-                    wc.runCommit(paths: checked.sorted(), message: message, keepChangelists: keepChangelists)
+                    wc.runCommit(paths: toCommit, message: message, keepChangelists: keepChangelists)
                     dismiss()
                 }
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(checked.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(toCommit.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)
@@ -188,7 +192,7 @@ struct UpdateToRevisionSheet: View {
         DialogFrame(title: L("Update to Revision"), message: L("Update the selection to a specific revision."),
                     okTitle: L("Update"), onOK: { wc.update(revision: revision, depth: depth.isEmpty ? nil : depth) }) {
             Form {
-                TextField(L("Revision"), text: $revision)
+                TextField(L("Revision"), text: $revision).accessibilityLabel(L("Revision"))
                 Picker(L("Depth"), selection: $depth) {
                     Text(L("Working copy")).tag("")
                     Text("infinity").tag("infinity")
@@ -211,8 +215,8 @@ struct SwitchSheet: View {
         DialogFrame(title: L("Switch"), message: L("Switch the working copy to another URL (branch or tag)."),
                     okTitle: L("Switch"), okDisabled: url.isEmpty, width: 560, onOK: { wc.switchTo(url: url, revision: revision) }) {
             Form {
-                TextField(L("URL"), text: $url)
-                TextField(L("Revision (empty = HEAD)"), text: $revision)
+                TextField(L("URL"), text: $url).accessibilityLabel(L("URL"))
+                TextField(L("Revision (empty = HEAD)"), text: $revision).accessibilityLabel(L("Revision (empty = HEAD)"))
             }
         }
         .onAppear { url = wc.info?.url ?? "" }
@@ -228,7 +232,7 @@ struct RelocateSheet: View {
                     okTitle: L("Relocate"), okDisabled: url.isEmpty, width: 560, onOK: { wc.relocate(to: url) }) {
             Form {
                 LabeledContent(L("Current root"), value: wc.info?.repositoryRoot ?? "")
-                TextField(L("New root URL"), text: $url)
+                TextField(L("New root URL"), text: $url).accessibilityLabel(L("New root URL"))
             }
         }
         .onAppear { url = wc.info?.repositoryRoot ?? "" }
@@ -245,7 +249,7 @@ struct MergeSheet: View {
 
     var body: some View {
         DialogFrame(title: L("Merge"), message: String(format: L("Merge into: %@"), wc.absolute(wc.selectedDir ?? "")),
-                    okTitle: L("Merge"), okDisabled: source.isEmpty, width: 600, onOK: {
+                    okTitle: L("Merge"), okDisabled: source.isEmpty || (twoSources && source2.isEmpty), width: 600, onOK: {
                         if twoSources { wc.mergeTwoSources(from: source, to: source2) }
                         else { wc.merge(source: source, range: range, dryRun: dryRun) }
                     }) {
@@ -255,11 +259,11 @@ struct MergeSheet: View {
                     Text(L("Merge from 2 Sources")).tag(true)
                 }
                 .pickerStyle(.segmented)
-                TextField(twoSources ? L("From URL@REV") : L("Source URL"), text: $source)
+                TextField(twoSources ? L("From URL@REV") : L("Source URL"), text: $source).accessibilityLabel(twoSources ? L("From URL@REV") : L("Source URL"))
                 if twoSources {
-                    TextField(L("To URL@REV"), text: $source2)
+                    TextField(L("To URL@REV"), text: $source2).accessibilityLabel(L("To URL@REV"))
                 } else {
-                    TextField(L("Revision range (e.g. 10:20, empty = all eligible)"), text: $range)
+                    TextField(L("Revision range (e.g. 10:20, empty = all eligible)"), text: $range).accessibilityLabel(L("Revision range (e.g. 10:20, empty = all eligible)"))
                     Toggle(L("Dry run (only show what would change)"), isOn: $dryRun)
                 }
             }
@@ -289,8 +293,8 @@ struct TagBranchSheet: View {
                                              fromWorkingCopy: fromWC)
                     }) {
             Form {
-                TextField(L("Name"), text: $name)
-                TextField(L("Commit message"), text: $message)
+                TextField(L("Name"), text: $name).accessibilityLabel(L("Name"))
+                TextField(L("Commit message"), text: $message).accessibilityLabel(L("Commit message"))
                 Toggle(L("Copy from the working copy (includes local modifications and mixed revisions)"), isOn: $fromWC)
             }
         }
@@ -309,8 +313,8 @@ struct CredentialsSheet: View {
                         wc.retryWithCredentials(SVNCredentials(username: user, password: password))
                     }) {
             Form {
-                TextField(L("User name"), text: $user)
-                SecureField(L("Password"), text: $password)
+                TextField(L("User name"), text: $user).accessibilityLabel(L("User name"))
+                SecureField(L("Password"), text: $password).accessibilityLabel(L("Password"))
             }
         }
         .onAppear { user = wc.credentials?.username ?? NSUserName() }
@@ -347,7 +351,7 @@ struct PropertiesSheet: View {
                 .frame(minWidth: 200)
                 VStack(alignment: .leading) {
                     HStack {
-                        TextField(L("Property name"), text: $name)
+                        TextField(L("Property name"), text: $name).accessibilityLabel(L("Property name"))
                         Menu("") {
                             ForEach(common, id: \.self) { n in Button(n) { name = n; value = props.first { $0.name == n }?.value ?? "" } }
                         }
@@ -359,13 +363,11 @@ struct PropertiesSheet: View {
                     Toggle(L("Apply recursively"), isOn: $recursive)
                     HStack {
                         Button(L("Set")) {
-                            wc.setProperty(name, value: value, on: [path], recursive: recursive)
-                            Task { try? await Task.sleep(for: .milliseconds(400)); await load() }
+                            wc.setProperty(name, value: value, on: [path], recursive: recursive) { Task { await load() } }
                         }
                         .disabled(name.isEmpty)
                         Button(L("Delete")) {
-                            wc.setProperty(name, value: nil, on: [path], recursive: recursive)
-                            Task { try? await Task.sleep(for: .milliseconds(400)); await load() }
+                            wc.setProperty(name, value: nil, on: [path], recursive: recursive) { Task { await load() } }
                         }
                         .disabled(name.isEmpty)
                     }
@@ -404,7 +406,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section(L("Subversion")) {
-                TextField(L("svn executable"), text: $svnPath, prompt: Text(SVN.executable))
+                TextField(L("svn executable"), text: $svnPath, prompt: Text(SVN.executable)).accessibilityLabel(L("svn executable"))
                 Text(L("Leave empty to detect automatically (Homebrew, /usr/local, /usr/bin)."))
                     .font(.caption).foregroundStyle(.secondary)
             }

@@ -292,6 +292,11 @@ final class FollowUpFixTests: XCTestCase {
                        "Index: a@b.txt\n===\n-x\n+y\nIndex: dir/c.txt\n===\n-p\n+q\n")
     }
 
+    func testPatchSectionsKeepLineEndingsWhenLaterSectionIsDropped() {
+        let patch = "Index: a@b.txt\n===\n-x\n+y\nIndex: other.txt\n===\n-1\n+2\n"
+        XCTAssertEqual(SVNParse.patchSections(patch, keeping: ["a@b.txt"]), "Index: a@b.txt\n===\n-x\n+y\n")
+    }
+
     func testCredentialsAreFoundPerRepository() {
         let store = CredentialStore()
         store.register(workingCopy: "/wc/one", repository: "https://a.example/svn/one")

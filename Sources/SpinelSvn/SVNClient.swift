@@ -263,10 +263,11 @@ struct StatusEntry: Identifiable, Hashable {
     var remoteProps: String?
     var copyFrom: String?
     var isDirectory: Bool
+    // Derived from `path` once at parse time; sorting 20,000 rows reads them very often.
+    var name: String
+    var directory: String
 
     var id: String { path }
-    var name: String { path.isEmpty ? "." : (path as NSString).lastPathComponent }
-    var directory: String { (path as NSString).deletingLastPathComponent }
 
     var effectiveState: ItemState {
         if treeConflicted || props == "conflicted" { return .conflicted }
@@ -382,7 +383,9 @@ enum SVNParse {
                 remoteItem: repos.flatMap { ItemState(rawValue: $0["item"] ?? "none") },
                 remoteProps: repos?["props"],
                 copyFrom: nil,
-                isDirectory: isDir))
+                isDirectory: isDir,
+                name: relPath.isEmpty ? "." : (relPath as NSString).lastPathComponent,
+                directory: (relPath as NSString).deletingLastPathComponent))
         }
 
         for target in doc.all("target") {
@@ -448,16 +451,18 @@ enum SVNParse {
     /// Keeps the "Index: <path>" sections of a unified diff that belong to `paths`
     /// (a directory keeps everything below it, "" keeps everything).
     static func patchSections(_ patch: String, keeping paths: [String]) -> String {
-        var out: [String] = []
+        var out = ""
         var keep = false
-        for line in patch.components(separatedBy: "\n") {
+        let lines = patch.components(separatedBy: "\n")
+        for (i, line) in lines.enumerated() {
             if line.hasPrefix("Index: ") {
                 let file = String(line.dropFirst(7))
                 keep = paths.contains { $0.isEmpty || file == $0 || file.hasPrefix($0 + "/") }
             }
-            if keep { out.append(line) }
+            // Each kept line keeps its own newline, so dropping a later section can't eat it.
+            if keep { out += i < lines.count - 1 ? line + "\n" : line }
         }
-        return out.joined(separator: "\n")
+        return out
     }
 
     static func props(_ data: Data) -> [PropEntry] {

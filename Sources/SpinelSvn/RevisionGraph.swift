@@ -119,6 +119,8 @@ struct RevisionGraphWindow: View {
     @State private var laneFilter = ""
     @State private var maxRows = 500
     @State private var currentLane: String?
+    /// Visible part of the graph; drawing is limited to it so large histories stay responsive.
+    @State private var visibleRect: CGRect = .null
     @State private var buildTask: Task<Void, Never>?
 
     private let rowH: CGFloat = 26
@@ -146,8 +148,15 @@ struct RevisionGraphWindow: View {
             }
             HSplitView {
                 ScrollView([.horizontal, .vertical]) {
-                    graph
+                    if model.lanes.isEmpty {
+                        ProgressView().frame(width: 400, height: 200)
+                    } else {
+                        graph
+                    }
                 }
+                // Content grows after loading; without an anchor the view stays centred in it.
+                .defaultScrollAnchor(.topLeading)
+                .trackingVisibleRect($visibleRect)
                 .background(Color(nsColor: .textBackgroundColor))
                 .frame(minWidth: 400)
                 details
@@ -169,8 +178,11 @@ struct RevisionGraphWindow: View {
         }
         return ZStack(alignment: .topLeading) {
             Canvas { ctx, _ in
+                let visible = visibleRect.isNull ? CGRect.infinite : visibleRect.insetBy(dx: -laneW, dy: -rowH * 2)
                 for e in model.edges {
-                    guard let a = point(e.from), let b = point(e.to) else { continue }
+                    guard let a = point(e.from), let b = point(e.to),
+                          visible.intersects(CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
+                                                    width: abs(a.x - b.x) + 1, height: abs(a.y - b.y) + 1)) else { continue }
                     var path = Path()
                     path.move(to: a)
                     if e.kind == .copy {
@@ -182,6 +194,7 @@ struct RevisionGraphWindow: View {
                         ctx.stroke(path, with: .color(laneColor(model.lanes[e.to.lane].kind).opacity(0.7)), lineWidth: 2)
                     }
                 }
+                drawNodes(ctx, point, in: visible)
             }
             .frame(width: width, height: height)
 
@@ -197,45 +210,49 @@ struct RevisionGraphWindow: View {
                     .offset(x: 20 + CGFloat(lane.id) * laneW + 4, y: 2)
                     .help(lane.path)
             }
-            ForEach(model.nodes) { n in
-                if let p = point(n) {
-                    nodeView(n)
-                        .position(p)
-                        .onTapGesture { selected = n }
-                }
-            }
         }
         .frame(width: width, height: height, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .gesture(SpatialTapGesture().onEnded { tap in
+            let row = Int(((tap.location.y - topH) / rowH).rounded(.down))
+            let lane = Int(((tap.location.x - 20) / laneW).rounded(.down))
+            guard model.rows.indices.contains(row) else { return }
+            selected = model.nodes.first { $0.lane == lane && $0.revision == model.rows[row] }
+        })
     }
 
-    private func nodeView(_ n: GraphNode) -> some View {
-        let lane = model.lanes[n.lane]
-        let color = laneColor(lane.kind)
-        let isSel = selected == n
-        return HStack(spacing: 3) {
-            Group {
-                if lane.kind == .tag {
-                    Image(systemName: "tag.fill")
-                } else if n.deleted {
-                    Image(systemName: "xmark.circle.fill")
-                } else {
-                    Circle().frame(width: 10, height: 10)
-                }
+    /// Nodes are drawn into the Canvas rather than built as views: thousands of separate
+    /// views (with tooltips and gestures) froze the window on large histories.
+    private func drawNodes(_ ctx: GraphicsContext, _ point: (GraphNode) -> CGPoint?, in visible: CGRect) {
+        for n in model.nodes {
+            guard let p = point(n), visible.contains(p) else { continue }
+            let lane = model.lanes[n.lane]
+            let color = n.deleted ? Color.red : laneColor(lane.kind)
+            let isSel = selected == n
+            let label = ctx.resolve(Text(verbatim: "\(n.revision)").font(.system(size: 10).monospacedDigit()))
+            let labelSize = label.measure(in: CGSize(width: 100, height: 20))
+            let box = CGRect(x: p.x - (labelSize.width + 17) / 2, y: p.y - 8, width: labelSize.width + 17, height: 16)
+            let shape = Path(roundedRect: box, cornerRadius: 4)
+            // Opaque first: the selection tint alone is translucent and let the lane line show through.
+            ctx.fill(shape, with: .color(Color(nsColor: .textBackgroundColor)))
+            if isSel { ctx.fill(shape, with: .color(Color.accentColor.opacity(0.3))) }
+            ctx.stroke(shape, with: .color(isSel ? Color.accentColor : color.opacity(0.4)))
+            let glyph = CGPoint(x: box.minX + 8, y: p.y)
+            if lane.kind == .tag || n.deleted {
+                var image = ctx.resolve(Image(systemName: n.deleted ? "xmark.circle.fill" : "tag.fill"))
+                image.shading = .color(color)
+                ctx.draw(image, in: CGRect(x: glyph.x - 5, y: glyph.y - 5, width: 10, height: 10))
+            } else {
+                ctx.fill(Path(ellipseIn: CGRect(x: glyph.x - 5, y: glyph.y - 5, width: 10, height: 10)), with: .color(color))
             }
-            .foregroundStyle(n.deleted ? .red : color)
-            Text("\(n.revision)").font(.system(size: 10).monospacedDigit())
+            ctx.draw(label, at: CGPoint(x: glyph.x + 7, y: p.y), anchor: .leading)
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 1)
-        .background(RoundedRectangle(cornerRadius: 4).fill(isSel ? Color.accentColor.opacity(0.3) : Color(nsColor: .textBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(isSel ? Color.accentColor : color.opacity(0.4)))
-        .help(byRevision[n.revision].map { "r\($0.revision) \($0.author): \($0.message.lines.first ?? "")" } ?? "")
     }
 
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let n = selected, let e = byRevision[n.revision] {
-                Text("r\(e.revision)").font(.title3.bold())
+                Text(verbatim: "r\(e.revision)").font(.title3.bold())
                 Text(model.lanes[n.lane].path).foregroundStyle(laneColor(model.lanes[n.lane].kind))
                 Text("\(e.author)  \(e.date.map(Fmt.short) ?? "")").font(.caption).foregroundStyle(.secondary)
                 Divider()
@@ -309,6 +326,18 @@ struct RevisionGraphWindow: View {
     }
 }
 
+private extension View {
+    /// macOS 14 has no scroll-geometry API; there the rect stays .null and everything is drawn.
+    @ViewBuilder func trackingVisibleRect(_ rect: Binding<CGRect>) -> some View {
+        if #available(macOS 15, *) {
+            onScrollGeometryChange(for: CGRect.self, of: \.visibleRect) { _, new in rect.wrappedValue = new }
+                .defaultScrollAnchor(.topLeading, for: .sizeChanges)
+        } else {
+            self
+        }
+    }
+}
+
 // MARK: - Log cache management
 
 struct LogCacheManager: View {
@@ -321,7 +350,7 @@ struct LogCacheManager: View {
                 .foregroundStyle(.secondary)
             Table(caches, selection: $selected) {
                 TableColumn(L("Repository")) { c in Text(c.rootURL).lineLimit(1).truncationMode(.middle) }
-                TableColumn(L("Revisions")) { c in Text("\(c.revisions) (r\(c.lastRevision))").monospacedDigit() }.width(110)
+                TableColumn(L("Revisions")) { c in Text(verbatim: "\(c.revisions) (r\(c.lastRevision))").monospacedDigit() }.width(110)
                 TableColumn(L("Size")) { c in Text(ByteCountFormatter.string(fromByteCount: Int64(c.bytes), countStyle: .file)) }.width(80)
                 TableColumn(L("Updated")) { c in Text(Fmt.short(c.updated)) }.width(130)
             }

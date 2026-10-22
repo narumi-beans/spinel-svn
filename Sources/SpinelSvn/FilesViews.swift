@@ -87,7 +87,7 @@ private struct DirectoryMenu: View {
 
     var body: some View {
         Button(L("Update")) { wc.selectedDir = path; wc.selectedFiles = []; wc.update() }
-        Button(L("Commit…")) { wc.commit(paths: wc.committable.filter { path.isEmpty || $0.path == path || $0.path.hasPrefix(path + "/") }.map(\.path)) }
+        Button(L("Commit…")) { wc.commit(paths: wc.committable.filter { path.isEmpty || $0.path == path || $0.path.hasPrefix(path + "/") }.map(\.path), pickedFiles: false) }
         Divider()
         Button(L("Create Directory…")) { wc.selectedDir = path; wc.createDirectory() }
         Button(L("Log…")) { wc.windowRequest = .log(path) }
@@ -102,10 +102,11 @@ private struct DirectoryMenu: View {
 
 struct FileTableView: View {
     @ObservedObject var wc: WorkingCopyModel
+    @Environment(\.openWindow) private var openWindow
     @State private var sortOrder = [KeyPathComparator(\StatusEntry.sortState), KeyPathComparator(\StatusEntry.name)]
 
     var body: some View {
-        let rows = wc.visibleFiles.sorted(using: sortOrder)
+        let rows = wc.sortedVisibleFiles(sortOrder)
         Table(rows, selection: $wc.selectedFiles, sortOrder: $sortOrder) {
             TableColumn(L("Name"), value: \.name) { e in
                 HStack(spacing: 4) {
@@ -146,16 +147,13 @@ struct FileTableView: View {
         .contextMenu(forSelectionType: String.self) { ids in
             FileMenu(wc: wc, ids: ids)
         } primaryAction: { ids in
-            guard let id = ids.first, let e = wc.entries[id] else { return }
-            if e.isDirectory {
-                wc.selectedDir = id
-            } else if e.effectiveState == .conflicted {
-                wc.windowRequest = .conflictSolver(id)
-            } else if e.effectiveState == .normal || e.effectiveState == .unversioned {
-                wc.openFile()
-            } else {
-                wc.windowRequest = .compare(id, .base)
+            let picked = ids.sorted().compactMap { wc.entries[$0] }
+            if picked.count == 1, let only = picked.first, only.isDirectory {
+                wc.selectedDir = only.path
+                return
             }
+            // Like Finder, a double-click acts on every selected file, in a stable order.
+            for e in picked where !e.isDirectory { open(e) }
         }
         .overlay {
             if rows.isEmpty && wc.dirTree != nil {
@@ -166,8 +164,23 @@ struct FileTableView: View {
     }
 }
 
+extension FileTableView {
+    private func open(_ e: StatusEntry) {
+        switch e.effectiveState {
+        case .conflicted:
+            openWindow(id: "conflict", value: FileTarget(root: wc.rootPath, path: e.path))
+        case .normal, .unversioned, .ignored:
+            NSWorkspace.shared.open(URL(fileURLWithPath: wc.absolute(e.path)))
+        default:
+            openWindow(id: "compare", value: CompareTarget(root: wc.rootPath, path: e.path, mode: .base))
+        }
+    }
+}
+
 extension StatusEntry {
-    var sortState: Int { ItemState.allCases.firstIndex(of: effectiveState).map { $0 == 0 ? 99 : $0 } ?? 100 }
+    private static let stateRank: [ItemState: Int] =
+        Dictionary(uniqueKeysWithValues: ItemState.allCases.enumerated().map { ($1, $0 == 0 ? 99 : $0) })
+    var sortState: Int { Self.stateRank[effectiveState] ?? 100 }
     var revisionSort: Int { committedRevision ?? -1 }
     var changelistSort: String { changelist ?? "" }
     var copyFromSort: String { copyFrom ?? "" }

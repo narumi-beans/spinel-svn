@@ -50,7 +50,7 @@ struct LogWindow: View {
                 }
                 .padding(8)
                 Table(filtered, selection: $selected) {
-                    TableColumn(L("Revision")) { e in Text("\(e.revision)").monospacedDigit() }.width(60)
+                    TableColumn(L("Revision")) { e in Text(verbatim: "\(e.revision)").monospacedDigit() }.width(60)
                     TableColumn(L("Date")) { e in Text(e.date.map(Fmt.short) ?? "") }.width(min: 100, ideal: 130)
                     TableColumn(L("Author"), value: \.author).width(min: 60, ideal: 100)
                     TableColumn(L("Message")) { e in Text(e.message.lines.first ?? "") }
@@ -95,7 +95,8 @@ struct LogWindow: View {
         .navigationTitle(String(format: L("Log: %@"), target.path.isEmpty ? (target.root as NSString).lastPathComponent : target.path))
         .task { await reload() }
         .onChange(of: selected) { selectedPath = nil; patch = nil }
-        .onChange(of: selectedPath) { Task { await loadPatch() } }
+        // task(id:) cancels the previous load, so a slow earlier diff can't replace the current one.
+        .task(id: selectedPath) { await loadPatch() }
     }
 
     private func actionColor(_ a: String) -> Color {
@@ -172,6 +173,7 @@ struct LogWindow: View {
             String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
         }.joined(separator: "/")
         let r = await SVN.run(["diff", "--internal-diff", "-c", String(rev), root + "/" + encoded + "@\(rev)"], cwd: nil)
+        guard !Task.isCancelled else { return }
         patch = r.ok ? (r.text.isEmpty ? L("(no textual changes)") : r.text) : r.stderr
     }
 }
@@ -201,7 +203,7 @@ struct AnnotateWindow: View {
                                 .foregroundStyle(.blue)
                             Text(l.author).frame(width: 90, alignment: .leading).lineLimit(1)
                             Text(l.date.map(Fmt.short) ?? "").frame(width: 120, alignment: .leading).foregroundStyle(.secondary)
-                            Text("\(l.number)").frame(width: 44, alignment: .trailing).foregroundStyle(.secondary)
+                            Text(verbatim: "\(l.number)").frame(width: 44, alignment: .trailing).foregroundStyle(.secondary)
                             Text(l.text.isEmpty ? " " : l.text).fixedSize()
                         }
                         .frame(minWidth: 900, alignment: .leading)
@@ -213,10 +215,11 @@ struct AnnotateWindow: View {
                 }
                 .font(.system(size: 11.5, design: .monospaced))
             }
+            .defaultScrollAnchor(.topLeading)
             .background(Color(nsColor: .textBackgroundColor))
             if let h = highlight, let m = messages[h] {
                 Divider()
-                Text("r\(m.revision) \(m.author): \(m.message)")
+                Text(verbatim: "r\(m.revision) \(m.author): \(m.message)")
                     .font(.caption)
                     .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -375,7 +378,7 @@ struct RepositoryBrowser: View {
             repositoryRoot = info?.repositoryRoot ?? ""
             await list()
         }
-        .onChange(of: selected) { Task { await preview() } }
+        .task(id: selected) { await preview() }
     }
 
     private func list() async {
@@ -420,6 +423,7 @@ struct RepositoryBrowser: View {
             return
         }
         let r = await SVN.run(["cat", item.url], cwd: nil)
+        guard !Task.isCancelled else { return }
         content = r.stdout.looksBinary ? L("Binary file") : r.text
     }
 }

@@ -71,6 +71,12 @@ struct MainCommands: Commands {
     @Environment(\.openWindow) var openWindow
 
     private var noWC: Bool { wc == nil }
+
+    /// Uses an open welcome window if there is one; otherwise opens a new window for the dialog.
+    private func showWelcome(_ request: WelcomeRouter.Request) {
+        if WelcomeRouter.shared.openWelcomeWindows == 0 { openWindow(id: "project") }
+        WelcomeRouter.shared.request = request
+    }
     private var noSel: Bool { wc?.selectedFiles.isEmpty ?? true }
 
     var body: some Commands {
@@ -80,10 +86,10 @@ struct MainCommands: Commands {
         }
 
         CommandMenu(L("Project")) {
-            Button(L("Check Out…")) { openWindow(id: "project"); WelcomeRouter.shared.request = .checkout }
-            Button(L("Open Working Copy…")) { openWindow(id: "project"); WelcomeRouter.shared.request = .open }
-            Button(L("Import Into Repository…")) { openWindow(id: "project"); WelcomeRouter.shared.request = .importProject }
-            Button(L("Set Up Local Repository…")) { openWindow(id: "project"); WelcomeRouter.shared.request = .localRepo }
+            Button(L("Check Out…")) { showWelcome(.checkout) }
+            Button(L("Open Working Copy…")) { showWelcome(.open) }
+            Button(L("Import Into Repository…")) { showWelcome(.importProject) }
+            Button(L("Set Up Local Repository…")) { showWelcome(.localRepo) }
             Button(L("Open or Manage Projects…")) { openWindow(id: "project") }
                 .keyboardShortcut("o")
             Divider()
@@ -237,4 +243,5 @@ final class WelcomeRouter: ObservableObject {
     static let shared = WelcomeRouter()
     enum Request { case checkout, open, importProject, localRepo }
     @Published var request: Request?
+    var openWelcomeWindows = 0
 }

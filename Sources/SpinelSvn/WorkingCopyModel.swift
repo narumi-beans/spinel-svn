@@ -28,7 +28,7 @@ final class DirNode: Identifiable, Hashable {
 
 /// Which modal dialog the project window should present.
 enum ProjectSheet: Identifiable {
-    case commit([String])
+    case commit([String], pickedFiles: Bool)
     case input(InputRequest)
     case properties(String)
     case updateToRevision
@@ -87,7 +87,9 @@ final class WorkingCopyModel: ObservableObject {
     var name: String { root.lastPathComponent }
 
     @Published var info: WCInfo?
-    @Published var entries: [String: StatusEntry] = [:]
+    @Published var entries: [String: StatusEntry] = [:] { didSet { entriesVersion &+= 1 } }
+    private var entriesVersion = 0
+    private var sortedCache: (key: [AnyHashable], rows: [StatusEntry])?
     @Published var dirTree: DirNode?
     @Published var selectedDir: String? = ""
     @Published var selectedFiles: Set<String> = []
@@ -134,6 +136,8 @@ final class WorkingCopyModel: ObservableObject {
     @Published var showRemoteChanged = Pref.bool("showRemoteChanged", true) { didSet { Pref.set("showRemoteChanged", showRemoteChanged) } }
 
     private var pendingRetry: (() -> Void)?
+    private var latestRefresh = 0
+    private var latestTreeBuild = 0
 
     init(path: String) {
         root = URL(fileURLWithPath: path).standardizedFileURL
@@ -209,6 +213,9 @@ final class WorkingCopyModel: ObservableObject {
     }
 
     func refresh(remote: Bool = false) async {
+        // Overlapping refreshes may finish out of order; only the newest may update the view.
+        latestRefresh += 1
+        let request = latestRefresh
         var args = ["status", "--xml", "-v", "--no-ignore"]
         if remote || remoteStateLoaded { args.append("-u") }
         args.append(rootPath)
@@ -225,10 +232,14 @@ final class WorkingCopyModel: ObservableObject {
             return
         }
         if remote && r.ok { remoteStateLoaded = true }
-        var map: [String: StatusEntry] = [:]
-        for e in SVNParse.status(r.stdout, root: root) { map[e.path] = e }
+        // Parsing tens of thousands of entries (and stat-ing each) must not block the main thread.
+        let root = self.root
+        var map = await Task.detached(priority: .userInitiated) {
+            Dictionary(SVNParse.status(r.stdout, root: root).map { ($0.path, $0) }, uniquingKeysWith: { _, last in last })
+        }.value
         hideConflictArtifacts(&map)
         await fillCopyFrom(&map)
+        guard request == latestRefresh else { return }
         entries = map
         reviewStamps = reviewStamps.filter { map[$0.key] != nil && stamp($0.key) == $0.value }
         refreshGeneration += 1
@@ -275,9 +286,26 @@ final class WorkingCopyModel: ObservableObject {
         if r.ok { transactions = SVNParse.log(r.stdout) }
     }
 
+    /// Rebuilds the directory tree off the main thread; a newer rebuild supersedes an older one.
     func rebuildTree() {
+        latestTreeBuild += 1
+        let request = latestTreeBuild
+        let (root, name, entries, showIgnored) = (root, name, entries, showIgnored)
+        Task {
+            let tree = await Task.detached(priority: .userInitiated) {
+                Self.buildTree(root: root, name: name, entries: entries, showIgnored: showIgnored)
+            }.value
+            if request == latestTreeBuild { dirTree = tree }
+        }
+    }
+
+    nonisolated private static func buildTree(root: URL, name: String, entries: [String: StatusEntry],
+                                              showIgnored: Bool) -> DirNode {
         let fm = FileManager.default
         let rootNode = DirNode(path: "", name: name)
+        func absolute(_ rel: String) -> String {
+            rel.isEmpty ? root.path : (root.path as NSString).appendingPathComponent(rel)
+        }
         func build(_ node: DirNode, depth: Int) {
             let abs = absolute(node.path)
             guard depth < 40, let items = try? fm.contentsOfDirectory(atPath: abs) else { return }
@@ -312,7 +340,7 @@ final class WorkingCopyModel: ObservableObject {
             n.children?.forEach(mark)
         }
         mark(rootNode)
-        dirTree = rootNode
+        return rootNode
     }
 
     // MARK: Derived data
@@ -340,6 +368,16 @@ final class WorkingCopyModel: ObservableObject {
             if !filter.isEmpty && !e.name.lowercased().contains(filter) { return false }
             return true
         }
+    }
+
+    /// The file table body runs on every published change; re-sort only when its inputs change.
+    func sortedVisibleFiles(_ order: [KeyPathComparator<StatusEntry>]) -> [StatusEntry] {
+        let key: [AnyHashable] = [entriesVersion, selectedDir, filterText, showSubdirFiles, showUnchanged,
+                                  showUnversioned, showIgnored, showChangeSetFiles, showRemoteChanged, order]
+        if let cache = sortedCache, cache.key == key { return cache.rows }
+        let rows = visibleFiles.sorted(using: order)
+        sortedCache = (key, rows)
+        return rows
     }
 
     var committable: [StatusEntry] {
@@ -408,8 +446,10 @@ final class WorkingCopyModel: ObservableObject {
         }
     }
 
-    func commit(paths: [String]?) {
-        sheet = .commit(paths ?? (selectedFiles.isEmpty ? committable.map(\.path) : selectedFiles.sorted()))
+    /// `pickedFiles`: the user chose these exact files, so unversioned ones among them start checked.
+    func commit(paths: [String]?, pickedFiles: Bool? = nil) {
+        let picked = pickedFiles ?? (paths != nil || !selectedFiles.isEmpty)
+        sheet = .commit(paths ?? (selectedFiles.isEmpty ? committable.map(\.path) : selectedFiles.sorted()), pickedFiles: picked)
     }
 
     func runCommit(paths: [String], message: String, keepChangelists: Bool, onSuccess: (() -> Void)? = nil) {
@@ -463,7 +503,7 @@ final class WorkingCopyModel: ObservableObject {
                 // `svn delete --force` erases unversioned files for good; those are not svn's to remove.
                 let versioned = paths.filter { entries[$0]?.item != .unversioned }
                 for p in paths where entries[p]?.item == .unversioned && opts.first != true {
-                    try? FileManager.default.trashItem(at: URL(fileURLWithPath: absolute(p)), resultingItemURL: nil)
+                    moveToTrash(p)
                 }
                 guard !versioned.isEmpty else { Task { await refresh() }; return }
                 perform(L("Remove")) { [self] in await svn(args + versioned.map(absolute)) }
@@ -489,16 +529,20 @@ final class WorkingCopyModel: ObservableObject {
             title: L("Delete Physically"),
             message: String(format: L("Move %d item(s) to the Trash?"), paths.count),
             destructive: true) { [self] _ in
-                for p in paths {
-                    do {
-                        try FileManager.default.trashItem(at: URL(fileURLWithPath: absolute(p)), resultingItemURL: nil)
-                        log(.info, String(format: L("Moved to Trash: %@"), p))
-                    } catch {
-                        log(.error, error.localizedDescription)
-                    }
-                }
+                paths.forEach(moveToTrash)
                 Task { await refresh() }
             })
+    }
+
+    /// Moves a working-copy item to the Trash and reports where it went.
+    private func moveToTrash(_ rel: String) {
+        var trashed: NSURL?
+        do {
+            try FileManager.default.trashItem(at: URL(fileURLWithPath: absolute(rel)), resultingItemURL: &trashed)
+            log(.info, String(format: L("Moved to Trash: %@"), "\(rel) → \(trashed?.path ?? "?")"))
+        } catch {
+            log(.error, error.localizedDescription)
+        }
     }
 
     func ignore() {
@@ -757,9 +801,10 @@ final class WorkingCopyModel: ObservableObject {
 
     // MARK: Properties
 
-    func setProperty(_ name: String, value: String?, on paths: [String], recursive: Bool = false) {
+    func setProperty(_ name: String, value: String?, on paths: [String], recursive: Bool = false,
+                     onDone: (() -> Void)? = nil) {
         let paths = paths.map(absolute)
-        perform(L("Set Property")) { [self] in
+        perform(L("Set Property"), onSuccess: onDone) { [self] in
             var args = value == nil ? ["propdel", name] : ["propset", name, value!]
             if recursive { args.append("-R") }
             return await svn(args + paths)

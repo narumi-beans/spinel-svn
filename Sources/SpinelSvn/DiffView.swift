@@ -68,6 +68,7 @@ struct DiffTextView: View {
                 .font(.system(size: 11.5, design: .monospaced))
                 .textSelection(.enabled)
             }
+            .defaultScrollAnchor(.topLeading)
             .background(Color(nsColor: .textBackgroundColor))
             HStack {
                 Text(String(format: L("%d change(s)"), changeCount))
@@ -221,6 +222,7 @@ struct PatchTextView: View {
             .font(.system(size: 11.5, design: .monospaced))
             .textSelection(.enabled)
         }
+        .defaultScrollAnchor(.topLeading)
         .background(Color(nsColor: .textBackgroundColor))
     }
 

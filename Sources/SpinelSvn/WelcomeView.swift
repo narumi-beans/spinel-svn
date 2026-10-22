@@ -62,6 +62,8 @@ struct WelcomeView: View {
             }
             .padding(16)
         }
+        .onAppear { WelcomeRouter.shared.openWelcomeWindows += 1 }
+        .onDisappear { WelcomeRouter.shared.openWelcomeWindows -= 1 }
         .task {
             if selectedProject == nil { selectedProject = app.projects.first?.path }
             if app.projects.isEmpty { choice = .checkout }
@@ -160,14 +162,14 @@ struct CheckoutSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L("Check Out")).font(.title3.bold())
             Form {
-                TextField(L("Repository URL"), text: $url, prompt: Text("https://svn.example.com/repo/trunk"))
-                TextField(L("Revision (empty = HEAD)"), text: $revision)
+                TextField(L("Repository URL"), text: $url, prompt: Text("https://svn.example.com/repo/trunk")).accessibilityLabel(L("Repository URL"))
+                TextField(L("Revision (empty = HEAD)"), text: $revision).accessibilityLabel(L("Revision (empty = HEAD)"))
                 HStack {
-                    TextField(L("Local directory"), text: $dir)
+                    TextField(L("Local directory"), text: $dir).accessibilityLabel(L("Local directory"))
                     Button(L("Choose…")) { if let d = chooseDirectory(L("Choose the parent directory")) { dir = (d as NSString).appendingPathComponent(lastSegment) } }
                 }
-                TextField(L("User name (optional)"), text: $user)
-                SecureField(L("Password (optional)"), text: $password)
+                TextField(L("User name (optional)"), text: $user).accessibilityLabel(L("User name (optional)"))
+                SecureField(L("Password (optional)"), text: $password).accessibilityLabel(L("Password (optional)"))
             }
             if !state.log.isEmpty {
                 ScrollView { Text(state.log).font(.caption.monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
@@ -225,14 +227,14 @@ struct ImportSheet: View {
             Text(L("Import Into Repository")).font(.title3.bold())
             Form {
                 HStack {
-                    TextField(L("Local directory"), text: $dir)
+                    TextField(L("Local directory"), text: $dir).accessibilityLabel(L("Local directory"))
                     Button(L("Choose…")) { if let d = chooseDirectory(L("Choose the directory to import"), create: false) { dir = d } }
                 }
-                TextField(L("Repository URL"), text: $url)
-                TextField(L("Commit message"), text: $message)
+                TextField(L("Repository URL"), text: $url).accessibilityLabel(L("Repository URL"))
+                TextField(L("Commit message"), text: $message).accessibilityLabel(L("Commit message"))
                 Toggle(L("Turn the directory into a working copy after import"), isOn: $checkoutAfter)
-                TextField(L("User name (optional)"), text: $user)
-                SecureField(L("Password (optional)"), text: $password)
+                TextField(L("User name (optional)"), text: $user).accessibilityLabel(L("User name (optional)"))
+                SecureField(L("Password (optional)"), text: $password).accessibilityLabel(L("Password (optional)"))
             }
             if !state.log.isEmpty {
                 ScrollView { Text(state.log).font(.caption.monospaced()).frame(maxWidth: .infinity, alignment: .leading) }
@@ -290,11 +292,11 @@ struct LocalRepoSheet: View {
                 .foregroundStyle(.secondary)
             Form {
                 HStack {
-                    TextField(L("Repository directory"), text: $repoDir)
+                    TextField(L("Repository directory"), text: $repoDir).accessibilityLabel(L("Repository directory"))
                     Button(L("Choose…")) { if let d = chooseDirectory(L("Choose the parent directory")) { repoDir = (d as NSString).appendingPathComponent("repo") } }
                 }
                 HStack {
-                    TextField(L("Working copy directory"), text: $wcDir)
+                    TextField(L("Working copy directory"), text: $wcDir).accessibilityLabel(L("Working copy directory"))
                     Button(L("Choose…")) { if let d = chooseDirectory(L("Choose the parent directory")) { wcDir = (d as NSString).appendingPathComponent("work") } }
                 }
                 Toggle(L("Create trunk/branches/tags layout"), isOn: $standardLayout)

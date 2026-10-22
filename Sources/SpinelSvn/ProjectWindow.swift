@@ -293,7 +293,7 @@ struct TransactionsPane: View {
             List(wc.transactions) { e in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
-                        Text("r\(e.revision)").font(.caption.monospacedDigit().bold())
+                        Text(verbatim: "r\(e.revision)").font(.caption.monospacedDigit().bold())
                         Text(e.author).font(.caption)
                         Spacer()
                         Text(e.date.map(Fmt.short) ?? "").font(.caption).foregroundStyle(.secondary)
@@ -324,7 +324,7 @@ struct StatusBar: View {
             Spacer()
             if let info = wc.info {
                 Text(info.url).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                Text("r\(info.revision)").monospacedDigit()
+                Text(verbatim: "r\(info.revision)").monospacedDigit()
             }
             if wc.remoteStateLoaded {
                 Image(systemName: "network").help(L("Remote state is shown"))
