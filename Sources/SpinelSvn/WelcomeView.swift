@@ -201,6 +201,7 @@ struct CheckoutSheet: View {
         state.running = false
         state.log += r.text.lines.suffix(30).joined(separator: "\n") + "\n" + r.stderr
         if r.ok {
+            if let creds { CredentialStore.shared.save(creds, repository: url) }
             AppState.shared.register(path: dir)
             dismiss()
             onDone(dir)
@@ -256,6 +257,7 @@ struct ImportSheet: View {
         let r = await SVN.run(["import", dir, url, "-m", message], cwd: nil, credentials: creds)
         state.log = r.text + r.stderr
         guard r.ok else { state.running = false; return }
+        if let creds { CredentialStore.shared.save(creds, repository: url) }
         if checkoutAfter {
             // Check out over the imported directory so it becomes a working copy in place.
             let co = await SVN.run(["checkout", "--force", url, dir], cwd: nil, credentials: creds)

@@ -8,6 +8,7 @@ struct DiffControls: View {
     @Binding var mode: DiffDisplayMode
     @Binding var compact: Bool
     @Binding var ignoreWS: Bool
+    @Binding var ignoreEOL: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -20,6 +21,8 @@ struct DiffControls: View {
             .fixedSize()
             Toggle(L("Compact"), isOn: $compact).toggleStyle(.button)
             Toggle(L("Ignore WS"), isOn: $ignoreWS).toggleStyle(.button)
+            Toggle(L("Ignore EOL"), isOn: $ignoreEOL).toggleStyle(.button)
+                .help(L("Ignore line-ending changes (CR/LF)"))
         }
         .controlSize(.small)
     }
@@ -80,7 +83,7 @@ struct DiffTextView: View {
             let opts = options
             let m = mode, c = compact
             let computed = await Task.detached(priority: .userInitiated) { () -> ([DiffRow], Int) in
-                let l = lt.lines, r = rt.lines
+                let l = lt.linesKeepingCR, r = rt.linesKeepingCR
                 let ops = DiffEngine.diff(l, r, options: opts)
                 let side = DiffEngine.rows(left: l, right: r, ops: ops, compact: c, context: opts.context)
                 var hunks = 0
@@ -123,6 +126,11 @@ private extension DiffRow.Kind {
     }
 }
 
+/// Shows a carriage return as "␍" so CRLF/LF differences are visible.
+private func visible(_ s: String?) -> String? {
+    s.map { $0.hasSuffix("\r") ? String($0.dropLast()) + "␍" : $0 }
+}
+
 private struct LineNo: View {
     var n: Int?
     var body: some View {
@@ -141,9 +149,9 @@ private struct SideBySideRow: View {
             GapRow(text: row.left ?? "")
         } else {
             HStack(spacing: 0) {
-                half(row.leftNumber, row.left, row.kind.leftBackground)
+                half(row.leftNumber, visible(row.left), row.kind.leftBackground)
                 Divider()
-                half(row.rightNumber, row.right, row.kind.rightBackground)
+                half(row.rightNumber, visible(row.right), row.kind.rightBackground)
             }
         }
     }
@@ -174,7 +182,7 @@ private struct UnifiedRow: View {
             HStack(spacing: 0) {
                 LineNo(n: row.leftNumber)
                 LineNo(n: row.rightNumber)
-                Text(marker + " " + (row.kind == .inserted ? row.right ?? "" : row.left ?? "")).fixedSize()
+                Text(marker + " " + ((row.kind == .inserted ? visible(row.right) : visible(row.left)) ?? "")).fixedSize()
                 Spacer(minLength: 0)
             }
             .frame(minWidth: 900, alignment: .leading)

@@ -1,5 +1,5 @@
 import XCTest
-@testable import SvnDesk
+@testable import SpinelSvn
 
 final class DiffEngineTests: XCTestCase {
     private func apply(_ a: [String], _ b: [String], _ ops: [DiffOp]) -> [String] {
@@ -276,5 +276,31 @@ final class TagBranchBaseTests: XCTestCase {
         XCTAssertEqual(base("^/proj/branches/feat/src", tag: false), "https://h/repo/proj/branches")
         XCTAssertEqual(base("^/trunk/sub", tag: true), "https://h/repo/tags")
         XCTAssertEqual(base("^/%E8%B3%87%E6%96%99/trunk", tag: true), "https://h/repo/%E8%B3%87%E6%96%99/tags")
+    }
+}
+
+final class FollowUpFixTests: XCTestCase {
+    func testLineEndingChangesAreDifferencesUnlessIgnored() {
+        let base = "a\r\nb\r\n".linesKeepingCR, work = "a\nb\n".linesKeepingCR
+        XCTAssertEqual(DiffEngine.diff(base, work).filter { if case .equal = $0 { return false }; return true }.count, 4)
+        XCTAssertEqual(DiffEngine.diff(base, work, options: DiffOptions(ignoreLineEndings: true)), [.equal(0, 0), .equal(1, 1)])
+    }
+
+    func testPatchSectionsKeepOnlySelectedFiles() {
+        let patch = "Index: a@b.txt\n===\n-x\n+y\nIndex: other.txt\n===\n-1\n+2\nIndex: dir/c.txt\n===\n-p\n+q\n"
+        XCTAssertEqual(SVNParse.patchSections(patch, keeping: ["a@b.txt", "dir"]),
+                       "Index: a@b.txt\n===\n-x\n+y\nIndex: dir/c.txt\n===\n-p\n+q\n")
+    }
+
+    func testCredentialsAreFoundPerRepository() {
+        let store = CredentialStore()
+        store.register(workingCopy: "/wc/one", repository: "https://a.example/svn/one")
+        store.register(workingCopy: "/wc/two", repository: "https://b.example/svn/two")
+        store.save(SVNCredentials(username: "alice", password: "p1"), repository: "https://a.example/svn/one")
+        store.save(SVNCredentials(username: "bob", password: "p2"), repository: "https://b.example/svn/two/trunk")
+        XCTAssertEqual(store.lookup(args: ["log", "/wc/one/src/x.c"], cwd: nil)?.username, "alice")
+        XCTAssertEqual(store.lookup(args: ["info"], cwd: URL(fileURLWithPath: "/wc/two"))?.username, "bob")
+        XCTAssertEqual(store.lookup(args: ["cat", "https://a.example/svn/one/trunk/f"], cwd: nil)?.username, "alice")
+        XCTAssertNil(store.lookup(args: ["log", "/elsewhere/f"], cwd: nil))
     }
 }

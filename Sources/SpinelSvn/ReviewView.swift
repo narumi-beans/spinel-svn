@@ -12,6 +12,7 @@ struct ReviewView: View {
     @AppStorage("diffMode") private var mode = DiffDisplayMode.sideBySide
     @AppStorage("diffCompact") private var compact = true
     @AppStorage("diffIgnoreWS") private var ignoreWS = false
+    @AppStorage("diffIgnoreEOL") private var ignoreEOL = false
 
     private var files: [StatusEntry] { wc.committable }
     private var entry: StatusEntry? { current.flatMap { wc.entries[$0] } }
@@ -62,7 +63,7 @@ struct ReviewView: View {
                     Button {
                         let paths = files.map(\.path).filter { wc.reviewed.contains($0) }
                         wc.runCommit(paths: paths, message: message, keepChangelists: false) {
-                            wc.reviewed.subtract(paths)
+                            paths.forEach { wc.setReviewed($0, false) }
                             message = ""
                         }
                     } label: {
@@ -84,7 +85,7 @@ struct ReviewView: View {
                         Text(e.localStateLabel).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS)
+                    DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL)
                     Button { move(-1) } label: { Image(systemName: "chevron.up") }
                         .keyboardShortcut(.upArrow, modifiers: [.option])
                         .help(L("Previous File"))
@@ -92,7 +93,7 @@ struct ReviewView: View {
                         .keyboardShortcut(.downArrow, modifiers: [.option])
                         .help(L("Next File"))
                     Button {
-                        if let c = current { wc.reviewed.insert(c) }
+                        if let c = current { wc.setReviewed(c, true) }
                         move(1)
                     } label: {
                         Label(L("Reviewed, Next"), systemImage: "checkmark")
@@ -106,7 +107,7 @@ struct ReviewView: View {
                     Text(note).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     DiffTextView(left: left, right: right, mode: mode, compact: compact,
-                                 options: DiffOptions(ignoreWhitespace: ignoreWS),
+                                 options: DiffOptions(ignoreWhitespace: ignoreWS, ignoreLineEndings: ignoreEOL),
                                  leftTitle: L("Base"), rightTitle: L("Working Copy"))
                 }
             }
@@ -122,7 +123,7 @@ struct ReviewView: View {
     }
 
     private func toggleReviewed(_ p: String) {
-        if wc.reviewed.contains(p) { wc.reviewed.remove(p) } else { wc.reviewed.insert(p) }
+        wc.setReviewed(p, !wc.reviewed.contains(p))
     }
 
     private func move(_ d: Int) {

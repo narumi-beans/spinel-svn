@@ -42,8 +42,6 @@ enum SVN {
         "proplist", "propget", "mkdir", "move", "rename", "patch", "upgrade"
     ]
 
-    /// Credentials entered in any window, used by windows that have none of their own.
-    static var sessionCredentials: SVNCredentials?
 
     static func run(_ args: [String], cwd: URL?, credentials: SVNCredentials? = nil,
                     tool: String? = nil) async -> SVNResult {
@@ -51,7 +49,7 @@ enum SVN {
         var stdin: String?
         if tool == nil {
             full.append("--non-interactive")
-            if let c = credentials ?? sessionCredentials, !localCommands.contains(args.first ?? "") || args.contains("-u") {
+            if let c = credentials ?? CredentialStore.shared.lookup(args: args, cwd: cwd), !localCommands.contains(args.first ?? "") || args.contains("-u") {
                 // --password-from-stdin keeps the password out of the process list.
                 full += ["--username", c.username, "--password-from-stdin"]
                 stdin = c.password
@@ -137,6 +135,39 @@ enum SVN {
     /// Display form of an svn command line (credentials are appended later by `run`, so never shown).
     static func commandLine(_ args: [String]) -> String {
         "svn " + args.map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
+    }
+}
+
+/// Credentials entered in any window, per repository root, so windows that have none of
+/// their own (log, annotate, graph, …) can reach the same server.
+final class CredentialStore {
+    static let shared = CredentialStore()
+    private let lock = NSLock()
+    private var byRepository: [String: SVNCredentials] = [:]
+    private var repositoryOfWorkingCopy: [String: String] = [:]
+
+    func save(_ c: SVNCredentials, repository: String) {
+        lock.withLock { byRepository[repository] = c }
+    }
+
+    func register(workingCopy root: String, repository: String) {
+        lock.withLock { repositoryOfWorkingCopy[root] = repository }
+    }
+
+    /// Finds credentials for the first URL or working-copy path among the arguments (or the cwd).
+    func lookup(args: [String], cwd: URL?) -> SVNCredentials? {
+        lock.withLock {
+            for arg in args + [cwd?.path].compactMap({ $0 }) {
+                let repository = arg.contains("://") ? arg : repositoryOfWorkingCopy.first {
+                    arg == $0.key || arg.hasPrefix($0.key + "/")
+                }?.value
+                guard let repository else { continue }
+                if let match = byRepository.first(where: { repository.hasPrefix($0.key) || $0.key.hasPrefix(repository) }) {
+                    return match.value
+                }
+            }
+            return nil
+        }
     }
 }
 
@@ -414,6 +445,21 @@ enum SVNParse {
         }
     }
 
+    /// Keeps the "Index: <path>" sections of a unified diff that belong to `paths`
+    /// (a directory keeps everything below it, "" keeps everything).
+    static func patchSections(_ patch: String, keeping paths: [String]) -> String {
+        var out: [String] = []
+        var keep = false
+        for line in patch.components(separatedBy: "\n") {
+            if line.hasPrefix("Index: ") {
+                let file = String(line.dropFirst(7))
+                keep = paths.contains { $0.isEmpty || file == $0 || file.hasPrefix($0 + "/") }
+            }
+            if keep { out.append(line) }
+        }
+        return out.joined(separator: "\n")
+    }
+
     static func props(_ data: Data) -> [PropEntry] {
         guard let doc = XNode.parse(data), let target = doc.child("target") else { return [] }
         return target.all("property").map { PropEntry(name: $0["name"] ?? "", value: $0.text) }
@@ -424,6 +470,15 @@ extension String {
     /// Splits text into lines without the trailing empty element for a final newline.
     var lines: [String] {
         var parts = components(separatedBy: "\n").map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+        if parts.last == "" { parts.removeLast() }
+        return parts
+    }
+}
+
+extension String {
+    /// Lines that keep a trailing "\r", so a diff can see line-ending changes.
+    var linesKeepingCR: [String] {
+        var parts = components(separatedBy: "\n")
         if parts.last == "" { parts.removeLast() }
         return parts
     }

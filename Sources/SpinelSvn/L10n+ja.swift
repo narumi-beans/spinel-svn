@@ -121,6 +121,8 @@ let japanese: [String: String] = [
     "Ignore Case": "大文字小文字を無視",
     "Ignore Patterns…": "無視パターン…",
     "Ignore WS": "空白を無視",
+    "Ignore EOL": "改行コードを無視",
+    "Ignore line-ending changes (CR/LF)": "改行コード (CR/LF) の違いを無視",
     "Ignored": "無視",
     "Ignored Files": "無視されたファイル",
     "Ignore…": "無視…",

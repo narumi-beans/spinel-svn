@@ -100,7 +100,23 @@ final class WorkingCopyModel: ObservableObject {
     @Published var filterText = ""
     @Published var credentials: SVNCredentials?
     @Published var remoteStateLoaded = false
-    @Published var reviewed: Set<String> = []
+    /// Reviewed files with the file state seen at review time; a later edit drops the mark.
+    @Published private(set) var reviewStamps: [String: FileStamp] = [:]
+    var reviewed: Set<String> { Set(reviewStamps.keys) }
+
+    struct FileStamp: Equatable {
+        var modified: Date?
+        var size: Int?
+    }
+
+    private func stamp(_ path: String) -> FileStamp {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: absolute(path))
+        return FileStamp(modified: attrs?[.modificationDate] as? Date, size: attrs?[.size] as? Int)
+    }
+
+    func setReviewed(_ path: String, _ on: Bool) {
+        reviewStamps[path] = on ? stamp(path) : nil
+    }
     /// Bumped on every refresh so views keyed on file state also reload unchanged-looking entries.
     @Published var refreshGeneration = 0
     @Published var perspective: Perspective = .main
@@ -170,7 +186,7 @@ final class WorkingCopyModel: ObservableObject {
 
     func retryWithCredentials(_ c: SVNCredentials) {
         credentials = c
-        SVN.sessionCredentials = c
+        if let repo = info?.repositoryRoot { CredentialStore.shared.save(c, repository: repo) }
         let retry = pendingRetry
         pendingRetry = nil
         retry?()
@@ -181,6 +197,7 @@ final class WorkingCopyModel: ObservableObject {
     func load() async {
         let r = await svn(["info", "--xml", rootPath], quiet: true)
         info = SVNParse.info(r.stdout)
+        if let repo = info?.repositoryRoot { CredentialStore.shared.register(workingCopy: rootPath, repository: repo) }
         await refresh()
         await loadTransactions()
         if let action = AppState.shared.pendingActions.removeValue(forKey: rootPath) {
@@ -213,6 +230,7 @@ final class WorkingCopyModel: ObservableObject {
         hideConflictArtifacts(&map)
         await fillCopyFrom(&map)
         entries = map
+        reviewStamps = reviewStamps.filter { map[$0.key] != nil && stamp($0.key) == $0.value }
         refreshGeneration += 1
         rebuildTree()
         selectedFiles = selectedFiles.filter { map[$0] != nil }
@@ -417,7 +435,7 @@ final class WorkingCopyModel: ObservableObject {
                 let r = await svn(["delete"] + missing)
                 if !r.ok { return r }
             }
-            let msgFile = FileManager.default.temporaryDirectory.appendingPathComponent("svndesk-msg-\(UUID().uuidString).txt")
+            let msgFile = FileManager.default.temporaryDirectory.appendingPathComponent("spinelsvn-msg-\(UUID().uuidString).txt")
             try? message.write(to: msgFile, atomically: true, encoding: .utf8)
             defer { try? FileManager.default.removeItem(at: msgFile) }
             var args = ["commit", "-F", msgFile.path, "--encoding", "UTF-8", "--depth", "empty"]
@@ -618,7 +636,11 @@ final class WorkingCopyModel: ObservableObject {
     }
 
     func createPatch() {
-        let paths = targets.map { $0.isEmpty ? "." : $0 }
+        let selection = targets
+        // svn diff cannot name a file containing "@" (it parses that as a peg revision),
+        // so diff the whole working copy and keep only the selected files' sections.
+        let viaRoot = selection.contains { $0.contains("@") }
+        let paths = viaRoot ? ["."] : selection.map { $0.isEmpty ? "." : $0 }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(name).patch"
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -626,7 +648,8 @@ final class WorkingCopyModel: ObservableObject {
             let r = await svn(["diff", "--internal-diff"] + paths, quiet: true)
             if r.ok {
                 do {
-                    try r.stdout.write(to: url)
+                    let patch = viaRoot ? Data(SVNParse.patchSections(r.text, keeping: selection).utf8) : r.stdout
+                    try patch.write(to: url)
                     log(.success, String(format: L("Patch written to %@"), url.path))
                 } catch {
                     log(.error, error.localizedDescription)

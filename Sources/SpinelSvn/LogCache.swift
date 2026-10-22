@@ -38,7 +38,7 @@ actor LogCache {
 
     static var directory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("SvnDesk/LogCache", isDirectory: true)
+        return base.appendingPathComponent("SpinelSvn/LogCache", isDirectory: true)
     }
 
     private func file(_ uuid: String) -> URL { Self.directory.appendingPathComponent("\(uuid).json") }

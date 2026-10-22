@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>SvnDesk</string>
+	<string>SpinelSvn</string>
 	<key>CFBundleDisplayName</key>
-	<string>SvnDesk</string>
+	<string>SpinelSvn</string>
 	<key>CFBundleIdentifier</key>
-	<string>jp.example.svndesk</string>
+	<string>jp.example.spinelsvn</string>
 	<key>CFBundleExecutable</key>
-	<string>SvnDesk</string>
+	<string>SpinelSvn</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -52,7 +52,7 @@
 			<key>NSMessage</key>
 			<string>updateFromSvn</string>
 			<key>NSPortName</key>
-			<string>SvnDesk</string>
+			<string>SpinelSvn</string>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
@@ -70,7 +70,7 @@
 			<key>NSMessage</key>
 			<string>commitToSvn</string>
 			<key>NSPortName</key>
-			<string>SvnDesk</string>
+			<string>SpinelSvn</string>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
@@ -86,13 +86,13 @@
 		</dict>
 		<dict>
 			<key>NSMessage</key>
-			<string>openInSvnDesk</string>
+			<string>openInSpinelSvn</string>
 			<key>NSPortName</key>
-			<string>SvnDesk</string>
+			<string>SpinelSvn</string>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Open in SvnDesk</string>
+				<string>Open in SpinelSvn</string>
 			</dict>
 			<key>NSSendFileTypes</key>
 			<array>

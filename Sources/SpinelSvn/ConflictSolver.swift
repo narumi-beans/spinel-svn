@@ -189,7 +189,7 @@ struct ConflictSolverWindow: View {
 
 extension Notification.Name {
     /// Posted with the working-copy root path when another window changed files in it.
-    static let workingCopyChanged = Notification.Name("SvnDeskWorkingCopyChanged")
+    static let workingCopyChanged = Notification.Name("SpinelSvnWorkingCopyChanged")
 }
 
 private struct ChunkView: View {

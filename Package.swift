@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "SvnDesk",
+    name: "SpinelSvn",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "SvnDesk",
-            path: "Sources/SvnDesk"
+            name: "SpinelSvn",
+            path: "Sources/SpinelSvn"
         ),
         .testTarget(
-            name: "SvnDeskTests",
-            dependencies: ["SvnDesk"],
-            path: "Tests/SvnDeskTests"
+            name: "SpinelSvnTests",
+            dependencies: ["SpinelSvn"],
+            path: "Tests/SpinelSvnTests"
         )
     ]
 )

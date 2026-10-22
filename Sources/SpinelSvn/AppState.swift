@@ -99,7 +99,7 @@ final class ServiceProvider: NSObject {
             .map(\.path)
     }
 
-    @objc func openInSvnDesk(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString>) {
+    @objc func openInSpinelSvn(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString>) {
         AppState.shared.handleService(paths: paths(pboard), action: nil)
     }
 

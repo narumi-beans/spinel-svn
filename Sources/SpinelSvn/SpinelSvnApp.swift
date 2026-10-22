@@ -3,6 +3,7 @@ import SwiftUI
 struct FileTarget: Codable, Hashable {
     var root: String
     var path: String          // relative to root
+    var revision: Int? = nil  // revision to select initially (log window)
 }
 
 enum CompareMode: String, Codable, Hashable {
@@ -16,7 +17,7 @@ struct CompareTarget: Codable, Hashable {
 }
 
 @main
-struct SvnDeskApp: App {
+struct SpinelSvnApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var app = AppState.shared
 

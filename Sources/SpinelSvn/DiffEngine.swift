@@ -19,6 +19,7 @@ struct DiffRow: Identifiable {
 struct DiffOptions: Equatable {
     var ignoreWhitespace = false
     var ignoreCase = false
+    var ignoreLineEndings = false
     var context = 3
 }
 
@@ -27,6 +28,7 @@ enum DiffEngine {
     static func diff(_ a: [String], _ b: [String], options: DiffOptions = DiffOptions()) -> [DiffOp] {
         func norm(_ s: String) -> String {
             var t = s
+            if options.ignoreLineEndings, t.hasSuffix("\r") { t.removeLast() }
             if options.ignoreWhitespace { t = t.filter { !$0.isWhitespace } }
             if options.ignoreCase { t = t.lowercased() }
             return t

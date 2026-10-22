@@ -137,7 +137,7 @@ struct LogWindow: View {
             }
             entries = LogCache.history(of: repoPath.isEmpty ? "/" : repoPath, in: store.entries, stopOnCopy: stopOnCopy)
             reachedEnd = true
-            if selected == nil { selected = entries.first?.revision }
+            if selected == nil { selected = initialSelection }
         } catch {
             self.error = error.localizedDescription
         }
@@ -156,7 +156,12 @@ struct LogWindow: View {
         let page = SVNParse.log(r.stdout)
         if page.count < pageSize { reachedEnd = true }
         entries += page
-        if selected == nil { selected = entries.first?.revision }
+        if selected == nil { selected = initialSelection }
+    }
+
+    private var initialSelection: Int? {
+        if let r = target.revision, entries.contains(where: { $0.revision == r }) { return r }
+        return entries.first?.revision
     }
 
     private func loadPatch() async {
@@ -246,6 +251,7 @@ struct CompareWindow: View {
     @AppStorage("diffMode") private var mode = DiffDisplayMode.sideBySide
     @AppStorage("diffCompact") private var compact = true
     @AppStorage("diffIgnoreWS") private var ignoreWS = false
+    @AppStorage("diffIgnoreEOL") private var ignoreEOL = false
     @State private var ignoreCase = false
 
     private var absPath: String { (target.root as NSString).appendingPathComponent(target.path) }
@@ -256,7 +262,7 @@ struct CompareWindow: View {
                 Text(target.path).font(.headline)
                 Spacer()
                 Toggle(L("Ignore Case"), isOn: $ignoreCase).toggleStyle(.button).controlSize(.small)
-                DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS)
+                DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL)
                 Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                     .help(L("Reload"))
             }
@@ -266,7 +272,7 @@ struct CompareWindow: View {
                 Text(note).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 DiffTextView(left: left, right: right, mode: mode, compact: compact,
-                             options: DiffOptions(ignoreWhitespace: ignoreWS, ignoreCase: ignoreCase),
+                             options: DiffOptions(ignoreWhitespace: ignoreWS, ignoreCase: ignoreCase, ignoreLineEndings: ignoreEOL),
                              leftTitle: leftTitle, rightTitle: rightTitle)
             }
         }

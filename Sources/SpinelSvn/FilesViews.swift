@@ -234,6 +234,7 @@ struct ChangesPane: View {
     @AppStorage("diffMode") private var mode = DiffDisplayMode.sideBySide
     @AppStorage("diffCompact") private var compact = true
     @AppStorage("diffIgnoreWS") private var ignoreWS = false
+    @AppStorage("diffIgnoreEOL") private var ignoreEOL = false
 
     private var selection: StatusEntry? {
         wc.selectedFiles.count == 1 ? wc.entries[wc.selectedFiles.first!] : nil
@@ -241,13 +242,13 @@ struct ChangesPane: View {
 
     var body: some View {
         Pane(title: L("Changes"), accessory: {
-            DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS)
+            DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL)
         }) {
             if let note {
                 Text(note).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 DiffTextView(left: left, right: right, mode: mode, compact: compact,
-                             options: DiffOptions(ignoreWhitespace: ignoreWS),
+                             options: DiffOptions(ignoreWhitespace: ignoreWS, ignoreLineEndings: ignoreEOL),
                              leftTitle: L("Base"), rightTitle: L("Working Copy"))
             }
         }

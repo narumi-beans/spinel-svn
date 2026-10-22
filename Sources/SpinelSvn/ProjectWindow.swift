@@ -51,7 +51,7 @@ struct MainProjectView: View {
             window.toolbar?.displayMode = .iconAndLabel
             window.toolbar?.allowsUserCustomization = true
             window.toolbar?.autosavesConfiguration = true
-            window.setFrameAutosaveName("SvnDeskProject-\(wc.rootPath)")
+            window.setFrameAutosaveName("SpinelSvnProject-\(wc.rootPath)")
         })
         .focusedSceneObject(wc)
         .task { await wc.load() }
@@ -302,7 +302,7 @@ struct TransactionsPane: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
-                    openWindow(id: "log", value: FileTarget(root: wc.rootPath, path: ""))
+                    openWindow(id: "log", value: FileTarget(root: wc.rootPath, path: "", revision: e.revision))
                 }
             }
             .listStyle(.plain)
