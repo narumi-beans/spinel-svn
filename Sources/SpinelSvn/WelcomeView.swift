@@ -5,112 +5,163 @@ struct WelcomeView: View {
     @EnvironmentObject var app: AppState
     @ObservedObject private var router = WelcomeRouter.shared
 
-    enum Choice: Hashable { case checkout, open, importProject, localRepo, existing }
-    @State private var choice: Choice = .existing
+    enum Choice: Hashable { case checkout, open, importProject, localRepo }
     @State private var selectedProject: String?
     @State private var dialog: Choice?
     @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L("What do you want to do?")).font(.title2)
-                Text(L("Check out a project from a repository, open an existing working copy, import a project into a repository or open a known project."))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(20)
-            Divider()
-            VStack(alignment: .leading, spacing: 10) {
-                Picker("", selection: $choice) {
-                    Text(L("Check out project from repository")).tag(Choice.checkout)
-                    Text(L("Open existing working copy")).tag(Choice.open)
-                    Text(L("Import project into repository")).tag(Choice.importProject)
-                    Text(L("Set up local repository")).tag(Choice.localRepo)
-                    Text(L("Open existing project(s):")).tag(Choice.existing)
-                }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
-
-                List(app.projects, selection: $selectedProject) { p in
-                    HStack {
-                        Image(systemName: "folder")
-                        Text(p.name).bold()
-                        Text("(\(abbreviate(p.path)))").foregroundStyle(.secondary)
-                    }
-                    .tag(p.path)
-                }
-                .contextMenu(forSelectionType: String.self) { ids in
-                    Button(L("Remove from List")) { ids.forEach(app.remove(path:)) }
-                } primaryAction: { ids in
-                    if let p = ids.first { open(p) }
-                }
-                .disabled(choice != .existing)
-                .opacity(choice == .existing ? 1 : 0.5)
-                .overlay {
-                    if app.projects.isEmpty { Text(L("No projects yet")).foregroundStyle(.secondary) }
-                }
-                if let error { Text(error).foregroundStyle(.red).font(.caption) }
-            }
-            .padding(20)
-            Divider()
-            HStack {
-                Spacer()
-                Button(L("Close")) { NSApp.keyWindow?.close() }
-                Button(L("OK")) { proceed() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(choice == .existing && selectedProject == nil)
-            }
-            .padding(16)
+        HStack(spacing: 0) {
+            brandPanel
+                .frame(width: 300)
+            recentProjects
+                .frame(minWidth: 380)
         }
+        .frame(minWidth: 700, minHeight: 440)
+        .ignoresSafeArea()
+        .background(WindowAccessor { window in
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbar?.isVisible = false
+            window.isMovableByWindowBackground = true
+            window.styleMask.insert(.fullSizeContentView)
+            if window.frame.width > 900 {
+                window.setContentSize(NSSize(width: 760, height: 460))
+                window.center()
+            }
+        })
         .onAppear { WelcomeRouter.shared.openWelcomeWindows += 1 }
         .onDisappear { WelcomeRouter.shared.openWelcomeWindows -= 1 }
         .task {
             if selectedProject == nil { selectedProject = app.projects.first?.path }
-            if app.projects.isEmpty { choice = .checkout }
             consumeRouter()
         }
-        .onChange(of: selectedProject) { if selectedProject != nil { choice = .existing } }
         .onChange(of: router.request) { consumeRouter() }
         .sheet(item: $dialog) { d in
             switch d {
             case .checkout: CheckoutSheet { open($0) }
             case .importProject: ImportSheet { open($0) }
             case .localRepo: LocalRepoSheet { open($0) }
-            default: EmptyView()
+            case .open: EmptyView()
             }
         }
+    }
+
+    // The one branded surface: the icon's garnet-to-plum backdrop, the gem, and the four ways in.
+    private var brandPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 28)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 96, height: 96)
+                .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+            Text("SpinelSvn")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.top, 14)
+            Text(L("Subversion client for Mac"))
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.7))
+            Text(String(format: L("Version %@"), Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"))
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.45))
+                .padding(.top, 2)
+            Spacer(minLength: 24)
+            VStack(alignment: .leading, spacing: 4) {
+                action(L("Check Out…"), "arrow.down.doc") { dialog = .checkout }
+                action(L("Open Working Copy…"), "folder") { openWorkingCopy() }
+                action(L("Import Into Repository…"), "square.and.arrow.up") { dialog = .importProject }
+                action(L("Set Up Local Repository…"), "externaldrive.badge.plus") { dialog = .localRepo }
+            }
+            if let error {
+                Text(error).font(.caption).foregroundStyle(.white).padding(.top, 8)
+            }
+            Spacer(minLength: 24)
+        }
+        .padding(.horizontal, 26)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(LinearGradient(colors: [Theme.garnet, Theme.plum], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .environment(\.colorScheme, .dark)
+    }
+
+    private func action(_ title: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Label(title, systemImage: symbol)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WelcomeActionStyle())
+    }
+
+    private var recentProjects: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("Recent Projects"))
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.top, 38)
+                .padding(.bottom, 8)
+            List(app.projects, selection: $selectedProject) { p in
+                HStack(spacing: 10) {
+                    Image(systemName: "folder.fill")
+                        .font(.title2)
+                        .foregroundStyle(Theme.spinel.gradient)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(p.name).font(.body.weight(.medium))
+                        Text(abbreviate(p.path)).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                .padding(.vertical, 3)
+                .tag(p.path)
+            }
+            .listStyle(.inset)
+            .contextMenu(forSelectionType: String.self) { ids in
+                Button(L("Remove from List")) { ids.forEach(app.remove(path:)) }
+            } primaryAction: { ids in
+                if let p = ids.first { open(p) }
+            }
+            .overlay {
+                if app.projects.isEmpty {
+                    ContentUnavailableView(L("No projects yet"), systemImage: "tray",
+                                           description: Text(L("Check out a project or open a working copy to get started.")))
+                }
+            }
+            HStack {
+                Spacer()
+                Button(L("Close")) { NSApp.keyWindow?.close() }
+                Button(L("Open")) { if let p = selectedProject { open(p) } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(selectedProject == nil)
+            }
+            .padding(14)
+        }
+        .background(.background)
     }
 
     private func consumeRouter() {
         guard let r = router.request else { return }
         router.request = nil
         switch r {
-        case .checkout: choice = .checkout
-        case .open: choice = .open
-        case .importProject: choice = .importProject
-        case .localRepo: choice = .localRepo
+        case .checkout: dialog = .checkout
+        case .open: openWorkingCopy()
+        case .importProject: dialog = .importProject
+        case .localRepo: dialog = .localRepo
         }
-        proceed()
     }
 
-    private func proceed() {
+    private func openWorkingCopy() {
         error = nil
-        switch choice {
-        case .existing:
-            if let p = selectedProject { open(p) }
-        case .open:
-            let panel = NSOpenPanel()
-            panel.canChooseDirectories = true
-            panel.canChooseFiles = false
-            panel.message = L("Choose the root directory of a working copy")
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            if let root = AppState.workingCopyRoot(for: url.path) {
-                open(root)
-            } else {
-                error = L("The selected directory is not a Subversion working copy.")
-            }
-        default:
-            dialog = choice
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.message = L("Choose the root directory of a working copy")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let root = AppState.workingCopyRoot(for: url.path) {
+            open(root)
+        } else {
+            error = L("The selected directory is not a Subversion working copy.")
         }
     }
 
@@ -130,6 +181,19 @@ struct WelcomeView: View {
 
 extension WelcomeView.Choice: Identifiable {
     var id: Self { self }
+}
+
+/// Quiet translucent rows on the brand panel that brighten on hover and press.
+private struct WelcomeActionStyle: ButtonStyle {
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(configuration.isPressed ? 0.22 : hovering ? 0.12 : 0)))
+            .onHover { hovering = $0 }
+    }
 }
 
 // MARK: - Checkout / import / local repository

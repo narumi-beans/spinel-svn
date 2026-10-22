@@ -1,18 +1,7 @@
 import SwiftUI
 
 extension ItemState {
-    var color: Color {
-        switch self {
-        case .modified, .merged: return .blue
-        case .added, .replaced: return .green
-        case .deleted, .missing, .obstructed, .incomplete: return .red
-        case .conflicted: return .orange
-        case .unversioned: return .secondary
-        case .ignored: return .gray
-        case .external: return .purple
-        case .normal, .none: return .primary
-        }
-    }
+    var color: Color { self == .normal || self == .none ? .primary : tint }
 
     var symbol: String {
         switch self {
@@ -31,22 +20,30 @@ extension ItemState {
     }
 }
 
-// MARK: - Directories
+// MARK: - Sidebar
 
-struct DirectoryTreeView: View {
+struct SidebarView: View {
     @ObservedObject var wc: WorkingCopyModel
     @State private var expanded: Set<String> = [""]
 
     var body: some View {
-        if let tree = wc.dirTree {
-            List(selection: $wc.selectedDir) {
-                DirRow(wc: wc, node: tree, expanded: $expanded)
+        List(selection: Binding(get: { wc.scope }, set: { if let s = $0 { wc.scope = s } })) {
+            Section(L("Workspace")) {
+                Label(L("Local Changes"), systemImage: "square.and.pencil")
+                    .badge(wc.committable.count)
+                    .tag(WorkingCopyModel.Scope.changes)
+                Label(L("All Files"), systemImage: "doc.on.doc")
+                    .tag(WorkingCopyModel.Scope.all)
             }
-            .listStyle(.sidebar)
-            .onChange(of: wc.selectedDir) { wc.selectedFiles.removeAll() }
-        } else {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            Section(L("Folders")) {
+                if let tree = wc.dirTree {
+                    DirRow(wc: wc, node: tree, expanded: $expanded)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
         }
+        .listStyle(.sidebar)
     }
 }
 
@@ -70,13 +67,20 @@ private struct DirRow: View {
     }
 
     private var label: some View {
-        HStack(spacing: 4) {
-            Image(systemName: node.hasLocalChanges ? "folder.fill.badge.gearshape" : "folder.fill")
-                .foregroundStyle(node.hasLocalChanges ? Color.blue : Color.accentColor.opacity(0.7))
-            Text(node.name)
-                .foregroundStyle(node.state == .normal ? Color.primary : node.state.color)
+        Label {
+            HStack(spacing: 6) {
+                Text(node.name)
+                    .foregroundStyle(node.state == .normal ? Color.primary : node.state.color)
+                if node.hasLocalChanges {
+                    Circle().fill(ItemState.modified.tint).frame(width: 6, height: 6)
+                        .help(L("Contains local changes"))
+                }
+            }
+        } icon: {
+            Image(systemName: node.path.isEmpty ? "externaldrive.connected.to.line.below" : "folder")
+                .foregroundStyle(.secondary)
         }
-        .tag(node.path as String?)
+        .tag(WorkingCopyModel.Scope.folder(node.path))
         .contextMenu { DirectoryMenu(wc: wc, path: node.path) }
     }
 }
@@ -104,46 +108,72 @@ struct FileTableView: View {
     @ObservedObject var wc: WorkingCopyModel
     @Environment(\.openWindow) private var openWindow
     @State private var sortOrder = [KeyPathComparator(\StatusEntry.sortState), KeyPathComparator(\StatusEntry.name)]
+    @SceneStorage("fileColumns") private var columns = TableColumnCustomization<StatusEntry>()
+
+    private var showsFolderColumn: Bool {
+        if case .folder = wc.scope { return wc.showSubdirFiles }
+        return true
+    }
 
     var body: some View {
         let rows = wc.sortedVisibleFiles(sortOrder)
-        Table(rows, selection: $wc.selectedFiles, sortOrder: $sortOrder) {
+        Table(rows, selection: $wc.selectedFiles, sortOrder: $sortOrder, columnCustomization: $columns) {
             TableColumn(L("Name"), value: \.name) { e in
-                HStack(spacing: 4) {
-                    Image(systemName: e.isDirectory ? "folder" : "doc")
-                        .foregroundStyle(.secondary)
-                    Text(e.name).foregroundStyle(e.effectiveState.color)
+                HStack(spacing: 7) {
+                    Image(systemName: fileSymbol(e))
+                        .foregroundStyle(e.effectiveState == .normal ? Color.secondary : e.effectiveState.tint)
+                        .frame(width: 16)
+                    Text(e.name)
+                        .strikethrough(e.item == .deleted || e.item == .missing)
+                    if showsFolderColumn && !e.directory.isEmpty {
+                        Text(e.directory).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
+                    }
                 }
             }
-            .width(min: 120, ideal: 220)
-            TableColumn(L("Revision"), value: \.revisionSort) { e in
-                Text(e.committedRevision.map(String.init) ?? "").monospacedDigit()
-            }
-            .width(min: 50, ideal: 70)
+            .width(min: 140, ideal: 200)
+            .customizationID("name")
+            .disabledCustomizationBehavior(.visibility)
             TableColumn(L("Local State"), value: \.sortState) { e in
-                Label(e.localStateLabel, systemImage: e.effectiveState.symbol)
-                    .foregroundStyle(e.effectiveState.color)
+                StatePill(entry: e)
             }
-            .width(min: 90, ideal: 130)
+            .width(min: 84, ideal: 96)
+            .customizationID("state")
+            TableColumn(L("Revision"), value: \.revisionSort) { e in
+                Text(e.committedRevision.map(String.init) ?? "")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 50, ideal: 64)
+            .customizationID("revision")
+            TableColumn(L("Author"), value: \.authorSort) { e in
+                Text(e.author ?? "").foregroundStyle(.secondary)
+            }
+            .width(min: 60, ideal: 100)
+            .customizationID("author")
             TableColumn(L("Remote State"), value: \.remoteStateLabel) { e in
                 Text(e.remoteStateLabel).foregroundStyle(.purple)
             }
             .width(min: 70, ideal: 100)
+            .customizationID("remote")
+            .defaultVisibility(.hidden)
             TableColumn(L("Change Set"), value: \.changelistSort) { e in
                 Text(e.changelist ?? "")
             }
             .width(min: 60, ideal: 90)
+            .customizationID("changeset")
+            .defaultVisibility(.hidden)
             TableColumn(L("Copy From"), value: \.copyFromSort) { e in
                 Text(e.copyFrom ?? "").lineLimit(1).truncationMode(.middle)
             }
             .width(min: 60, ideal: 140)
+            .customizationID("copyfrom")
+            .defaultVisibility(.hidden)
             TableColumn(L("Relative Directory"), value: \.directory)
                 .width(min: 80, ideal: 160)
-            TableColumn(L("Author"), value: \.authorSort) { e in
-                Text(e.author ?? "")
-            }
-            .width(min: 60, ideal: 90)
+                .customizationID("directory")
+                .defaultVisibility(.hidden)
         }
+        .tableStyle(.inset)
         .contextMenu(forSelectionType: String.self) { ids in
             FileMenu(wc: wc, ids: ids)
         } primaryAction: { ids in
@@ -156,12 +186,22 @@ struct FileTableView: View {
             for e in picked where !e.isDirectory { open(e) }
         }
         .overlay {
-            if rows.isEmpty && wc.dirTree != nil {
-                Text(wc.filterText.isEmpty ? L("No files to show") : L("No files match the filter"))
-                    .foregroundStyle(.secondary)
-            }
+            if rows.isEmpty && wc.dirTree != nil { emptyState }
         }
     }
+
+    @ViewBuilder private var emptyState: some View {
+        if !wc.filterText.isEmpty {
+            ContentUnavailableView.search(text: wc.filterText)
+        } else if wc.scope == .changes {
+            ContentUnavailableView(L("No Local Changes"), systemImage: "checkmark.seal",
+                                   description: Text(L("The working copy matches the repository.")))
+        } else {
+            ContentUnavailableView(L("No Files"), systemImage: "folder",
+                                   description: Text(L("This folder has no files to show with the current view options.")))
+        }
+    }
+
 }
 
 extension FileTableView {
@@ -237,7 +277,7 @@ private struct FileMenu: View {
     }
 }
 
-// MARK: - Changes preview
+// MARK: - Changes (detail column)
 
 struct ChangesPane: View {
     @ObservedObject var wc: WorkingCopyModel
@@ -254,18 +294,49 @@ struct ChangesPane: View {
     }
 
     var body: some View {
-        Pane(title: L("Changes"), accessory: {
-            DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL)
-        }) {
-            if let note {
-                Text(note).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if let e = selection {
+                VStack(spacing: 0) {
+                    header(e)
+                    Divider()
+                    if let note {
+                        ContentUnavailableView(note, systemImage: "doc.questionmark")
+                    } else {
+                        DiffTextView(left: left, right: right, mode: mode, compact: compact,
+                                     options: DiffOptions(ignoreWhitespace: ignoreWS, ignoreLineEndings: ignoreEOL),
+                                     leftTitle: L("Base"), rightTitle: L("Working Copy"))
+                    }
+                }
+            } else if wc.selectedFiles.count > 1 {
+                ContentUnavailableView(String(format: L("%d files selected"), wc.selectedFiles.count),
+                                       systemImage: "doc.on.doc",
+                                       description: Text(L("Select a single file to see its changes")))
             } else {
-                DiffTextView(left: left, right: right, mode: mode, compact: compact,
-                             options: DiffOptions(ignoreWhitespace: ignoreWS, ignoreLineEndings: ignoreEOL),
-                             leftTitle: L("Base"), rightTitle: L("Working Copy"))
+                ContentUnavailableView(L("No File Selected"), systemImage: "doc.text.magnifyingglass",
+                                       description: Text(L("Select a single file to see its changes")))
             }
         }
         .task(id: TaskKey(entry: selection, generation: wc.refreshGeneration)) { await load() }
+    }
+
+    private func header(_ e: StatusEntry) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: fileSymbol(e))
+                .font(.title2)
+                .foregroundStyle(e.effectiveState == .normal ? Color.secondary : e.effectiveState.tint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(e.name).font(.headline).lineLimit(1).truncationMode(.middle)
+                Text(e.directory.isEmpty ? wc.name : e.directory)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+            }
+            .layoutPriority(1)
+            StatePill(entry: e).fixedSize()
+            Spacer(minLength: 12)
+            DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL)
+                .fixedSize()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
     }
 
     private struct TaskKey: Equatable {
@@ -274,10 +345,7 @@ struct ChangesPane: View {
     }
 
     private func load() async {
-        guard let e = selection else {
-            note = L("Select a single file to see its changes")
-            return
-        }
+        guard let e = selection else { return }
         let content = await wc.diffContent(for: e)
         guard !Task.isCancelled else { return }
         switch content {

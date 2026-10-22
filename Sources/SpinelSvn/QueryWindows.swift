@@ -33,64 +33,111 @@ struct LogWindow: View {
     private var current: LogEntry? { entries.first { $0.revision == selected } }
 
     var body: some View {
-        VSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    TextField(L("Filter by message, author, path or revision"), text: $filter)
-                        .textFieldStyle(.roundedBorder)
-                    Toggle(L("Stop on copy"), isOn: $stopOnCopy)
-                        .onChange(of: stopOnCopy) { Task { await reload() } }
-                    Toggle(L("Use log cache"), isOn: $useCache)
-                        .onChange(of: useCache) { Task { await reload() } }
-                    if loading { ProgressView().controlSize(.small) }
-                    if let progress { Text(progress).font(.caption).foregroundStyle(.secondary) }
-                    if !useCache {
-                        Button(L("Load More")) { Task { await loadMore() } }.disabled(reachedEnd || loading)
+        NavigationSplitView {
+            List(filtered, selection: $selected) { e in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(e.message.lines.first ?? "").lineLimit(2)
+                    HStack(spacing: 6) {
+                        Text(verbatim: "r\(e.revision)")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(e.author)
+                        Spacer()
+                        Text(e.date.map(Fmt.short) ?? "")
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-                .padding(8)
-                Table(filtered, selection: $selected) {
-                    TableColumn(L("Revision")) { e in Text(verbatim: "\(e.revision)").monospacedDigit() }.width(60)
-                    TableColumn(L("Date")) { e in Text(e.date.map(Fmt.short) ?? "") }.width(min: 100, ideal: 130)
-                    TableColumn(L("Author"), value: \.author).width(min: 60, ideal: 100)
-                    TableColumn(L("Message")) { e in Text(e.message.lines.first ?? "") }
-                }
-                if let error { Text(error).foregroundStyle(.red).font(.caption).padding(4) }
+                .padding(.vertical, 3)
+                .tag(e.revision)
             }
-            .frame(minHeight: 200)
-            HSplitView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ScrollView {
-                        Text(current?.message ?? "")
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
-                    .frame(minHeight: 60, maxHeight: 140)
-                    Divider()
-                    List(current?.paths ?? [], selection: $selectedPath) { p in
-                        HStack {
-                            Text(p.action).bold().foregroundStyle(actionColor(p.action)).frame(width: 16)
-                            Text(p.path)
-                            if let cf = p.copyFromPath {
-                                Text(String(format: L("(from %@@%d)"), cf, p.copyFromRev ?? 0)).foregroundStyle(.secondary)
-                            }
+            .overlay {
+                if let error {
+                    ContentUnavailableView(L("Log could not be loaded"), systemImage: "exclamationmark.triangle",
+                                           description: Text(error))
+                } else if !loading && filtered.isEmpty {
+                    ContentUnavailableView.search(text: filter)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if loading || progress != nil || !useCache {
+                    HStack(spacing: 8) {
+                        if loading { ProgressView().controlSize(.small) }
+                        if let progress { Text(progress).font(.caption).foregroundStyle(.secondary) }
+                        Spacer()
+                        if !useCache {
+                            Button(L("Load More")) { Task { await loadMore() } }
+                                .controlSize(.small)
+                                .disabled(reachedEnd || loading)
                         }
-                        .tag(p.path)
                     }
+                    .padding(8)
+                    .background(.bar)
                 }
-                .frame(minWidth: 280)
-                Group {
-                    if let patch {
-                        PatchTextView(text: patch)
-                    } else {
-                        Text(L("Select a changed path to see its diff")).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-                .frame(minWidth: 400)
             }
-            .frame(minHeight: 200)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 340)
+        } detail: {
+            if let current {
+                VSplitView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(verbatim: "r\(current.revision)")
+                                    .font(.title3.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(current.author).font(.headline)
+                                Spacer()
+                                Text(current.date.map(Fmt.short) ?? "").foregroundStyle(.secondary)
+                            }
+                            ScrollView {
+                                Text(current.message)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 90)
+                        }
+                        .padding(14)
+                        Divider()
+                        List(current.paths, selection: $selectedPath) { p in
+                            HStack(spacing: 8) {
+                                Text(p.action)
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(actionColor(p.action))
+                                    .frame(width: 18, height: 18)
+                                    .background(RoundedRectangle(cornerRadius: 4).fill(actionColor(p.action).opacity(0.15)))
+                                Text(p.path)
+                                if let cf = p.copyFromPath {
+                                    Text(String(format: L("(from %@@%d)"), cf, p.copyFromRev ?? 0)).foregroundStyle(.secondary)
+                                }
+                            }
+                            .tag(p.path)
+                        }
+                        .listStyle(.inset)
+                    }
+                    .frame(minHeight: 160, idealHeight: 260)
+                    Group {
+                        if let patch {
+                            PatchTextView(text: patch)
+                        } else {
+                            ContentUnavailableView(L("No Path Selected"), systemImage: "doc.text.magnifyingglass",
+                                                   description: Text(L("Select a changed path to see its diff")))
+                        }
+                    }
+                    .frame(minHeight: 160)
+                }
+            } else {
+                ContentUnavailableView(L("No Revision Selected"), systemImage: "clock",
+                                       description: Text(L("Select a revision to see its message and changes.")))
+            }
+        }
+        .searchable(text: $filter, placement: .toolbar, prompt: Text(L("Filter by message, author, path or revision")))
+        .toolbar {
+            ToolbarItemGroup {
+                Toggle(L("Stop on copy"), isOn: $stopOnCopy)
+                    .onChange(of: stopOnCopy) { Task { await reload() } }
+                Toggle(L("Use log cache"), isOn: $useCache)
+                    .onChange(of: useCache) { Task { await reload() } }
+            }
         }
         .navigationTitle(String(format: L("Log: %@"), target.path.isEmpty ? (target.root as NSString).lastPathComponent : target.path))
         .task { await reload() }

@@ -13,8 +13,8 @@ struct DialogFrame<Content: View>: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.title3.bold())
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title).font(.title2.weight(.semibold))
             if let message { Text(message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             content
             HStack {
@@ -30,7 +30,7 @@ struct DialogFrame<Content: View>: View {
                 .disabled(okDisabled)
             }
         }
-        .padding(20)
+        .padding(22)
         .frame(width: width)
     }
 }
@@ -83,65 +83,107 @@ struct CommitSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L("Commit")).font(.title3.bold())
-            Text(wc.info?.url ?? wc.rootPath).font(.caption).foregroundStyle(.secondary)
-
-            HStack {
-                Text(L("Files to commit")).font(.headline)
-                Spacer()
-                Toggle(L("Show unversioned files"), isOn: $showUnversioned).controlSize(.small)
-                Button(L("All")) { checked = Set(candidates.map(\.path)) }.controlSize(.small)
-                Button(L("None")) { checked.removeAll() }.controlSize(.small)
-            }
-            List(candidates, selection: $focused) { e in
-                HStack {
-                    Toggle("", isOn: Binding(
-                        get: { checked.contains(e.path) },
-                        set: { if $0 { checked.insert(e.path) } else { checked.remove(e.path) } }))
-                        .labelsHidden()
-                    Image(systemName: e.effectiveState.symbol).foregroundStyle(e.effectiveState.color)
-                    Text(e.path.isEmpty ? "." : e.path)
-                    Spacer()
-                    Text(e.localStateLabel).foregroundStyle(.secondary).font(.caption)
-                    if let cl = e.changelist { Text("[\(cl)]").font(.caption).foregroundStyle(.purple) }
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L("Commit")).font(.title2.weight(.semibold))
+                    Text(wc.info?.url ?? wc.rootPath)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
-                .tag(e.path)
-            }
-            .frame(minHeight: 160)
-
-            HStack {
-                Text(L("Commit message")).font(.headline)
                 Spacer()
-                Menu(L("Recent messages")) {
+                Menu {
                     ForEach(AppState.shared.commitHistory, id: \.self) { m in
                         Button(m.lines.first ?? m) { message = m }
                     }
+                } label: {
+                    Label(L("Recent messages"), systemImage: "clock.arrow.circlepath")
                 }
                 .fixedSize()
                 .disabled(AppState.shared.commitHistory.isEmpty)
             }
-            TextEditor(text: $message)
-                .font(.system(.body, design: .monospaced))
-                .focused($messageFocused)
-                .frame(minHeight: 110)
-                .border(Color.secondary.opacity(0.3))
-            Toggle(L("Keep change sets after commit"), isOn: $keepChangelists)
+            .padding([.horizontal, .top], 20)
+            .padding(.bottom, 12)
 
-            HStack {
-                Text(String(format: L("%d file(s) selected"), toCommit.count)).foregroundStyle(.secondary)
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $message)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .focused($messageFocused)
+                    .padding(6)
+                if message.isEmpty {
+                    Text(L("Describe what changed and why"))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(height: 120)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(messageFocused ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.25), lineWidth: messageFocused ? 2 : 1))
+            .padding(.horizontal, 20)
+
+            HStack(spacing: 10) {
+                Text(L("Files to commit")).font(.headline)
                 Spacer()
+                Toggle(L("Show unversioned files"), isOn: $showUnversioned)
+                    .toggleStyle(.checkbox)
+                Button(L("All")) { checked = Set(candidates.map(\.path)) }
+                Button(L("None")) { checked.removeAll() }
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 6)
+
+            List(candidates, selection: $focused) { e in
+                HStack(spacing: 8) {
+                    Toggle("", isOn: Binding(
+                        get: { checked.contains(e.path) },
+                        set: { if $0 { checked.insert(e.path) } else { checked.remove(e.path) } }))
+                        .labelsHidden()
+                        .toggleStyle(.checkbox)
+                    Image(systemName: fileSymbol(e))
+                        .foregroundStyle(e.effectiveState.tint)
+                        .frame(width: 16)
+                    Text(e.name)
+                    Text(e.directory).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
+                    Spacer()
+                    if let cl = e.changelist {
+                        Label(cl, systemImage: "tag").font(.caption).foregroundStyle(.purple)
+                    }
+                    StatePill(entry: e)
+                }
+                .tag(e.path)
+            }
+            .listStyle(.bordered(alternatesRowBackgrounds: false))
+            .padding(.horizontal, 20)
+
+            HStack(spacing: 10) {
+                Toggle(L("Keep change sets after commit"), isOn: $keepChangelists)
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                Spacer()
+                Text(String(format: L("%d file(s) selected"), toCommit.count))
+                    .font(.callout).foregroundStyle(.secondary)
                 Button(L("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(L("Commit")) {
                     wc.runCommit(paths: toCommit, message: message, keepChangelists: keepChangelists)
                     dismiss()
                 }
                 .keyboardShortcut(.return, modifiers: .command)
+                .buttonStyle(.borderedProminent)
                 .disabled(toCommit.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .padding(20)
         }
-        .padding(20)
-        .frame(width: 720, height: 600)
+        .frame(width: 700, height: 620)
         .onAppear { messageFocused = true }
     }
 }

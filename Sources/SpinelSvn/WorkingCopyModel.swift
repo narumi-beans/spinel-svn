@@ -91,7 +91,22 @@ final class WorkingCopyModel: ObservableObject {
     private var entriesVersion = 0
     private var sortedCache: (key: [AnyHashable], rows: [StatusEntry])?
     @Published var dirTree: DirNode?
-    @Published var selectedDir: String? = ""
+    /// What the file list shows; the sidebar selects it.
+    enum Scope: Hashable {
+        case changes            // every local change in the working copy
+        case all                // every file in the working copy
+        case folder(String)     // one directory (relative path, "" = root)
+    }
+
+    @Published var scope: Scope = .changes {
+        didSet { if scope != oldValue { selectedFiles.removeAll() } }
+    }
+
+    /// The directory that folder-relative actions (create directory, merge target, …) apply to.
+    var selectedDir: String? {
+        get { if case let .folder(path) = scope { return path }; return "" }
+        set { scope = .folder(newValue ?? "") }
+    }
     @Published var selectedFiles: Set<String> = []
     @Published var output: [OutputLine] = []
     @Published var transactions: [LogEntry] = []
@@ -346,17 +361,24 @@ final class WorkingCopyModel: ObservableObject {
     // MARK: Derived data
 
     var visibleFiles: [StatusEntry] {
-        let dir = selectedDir ?? ""
         let filter = filterText.lowercased()
         return entries.values.filter { e in
             if e.path.isEmpty { return false }
             if e.isDirectory && e.item == .normal && e.props != "modified" { return false }
-            if showSubdirFiles {
-                if !dir.isEmpty && !(e.path.hasPrefix(dir + "/")) { return false }
-            } else if e.directory != dir {
-                return false
-            }
             let remoteChanged = e.remoteItem.map { $0 != .none && $0 != .normal } ?? false
+            switch scope {
+            case .changes:
+                let local = e.effectiveState != .normal && e.effectiveState != .ignored
+                if !(local || (showRemoteChanged && remoteChanged)) { return false }
+            case .all:
+                break
+            case let .folder(dir):
+                if showSubdirFiles {
+                    if !dir.isEmpty && !(e.path.hasPrefix(dir + "/")) { return false }
+                } else if e.directory != dir {
+                    return false
+                }
+            }
             switch e.effectiveState {
             case .normal:
                 if !(showUnchanged || (showRemoteChanged && remoteChanged)) { return false }
@@ -372,7 +394,7 @@ final class WorkingCopyModel: ObservableObject {
 
     /// The file table body runs on every published change; re-sort only when its inputs change.
     func sortedVisibleFiles(_ order: [KeyPathComparator<StatusEntry>]) -> [StatusEntry] {
-        let key: [AnyHashable] = [entriesVersion, selectedDir, filterText, showSubdirFiles, showUnchanged,
+        let key: [AnyHashable] = [entriesVersion, scope, filterText, showSubdirFiles, showUnchanged,
                                   showUnversioned, showIgnored, showChangeSetFiles, showRemoteChanged, order]
         if let cache = sortedCache, cache.key == key { return cache.rows }
         let rows = visibleFiles.sorted(using: order)

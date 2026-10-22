@@ -30,25 +30,48 @@ struct ProjectWindow: View {
 struct MainProjectView: View {
     @StateObject private var wc: WorkingCopyModel
     @Environment(\.openWindow) var openWindow
+    @SceneStorage("inspectorShown") private var inspectorShown = false
 
     init(path: String) {
         _wc = StateObject(wrappedValue: WorkingCopyModel(path: path))
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        Group {
             if wc.perspective == .review {
                 ReviewView(wc: wc)
             } else {
-                mainPerspective
+                NavigationSplitView {
+                    SidebarView(wc: wc)
+                        .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 360)
+                } content: {
+                    FileTableView(wc: wc)
+                        .navigationSplitViewColumnWidth(min: 300, ideal: 380)
+                } detail: {
+                    ChangesPane(wc: wc)
+                        .frame(minWidth: 420)
+                }
             }
-            StatusBar(wc: wc)
         }
+        .inspector(isPresented: $inspectorShown) {
+            InspectorView(wc: wc)
+                .inspectorColumnWidth(min: 260, ideal: 300, max: 440)
+        }
+        .searchable(text: $wc.filterText, placement: .toolbar, prompt: Text(L("Filter files")))
         .navigationTitle(wc.name)
-        .navigationSubtitle(wc.info?.relativeURL ?? wc.rootPath)
-        .toolbar(id: "main") { MainToolbar(wc: wc) }
+        .navigationSubtitle(subtitle)
+        .toolbar(id: "spinel.main") { MainToolbar(wc: wc, inspectorShown: $inspectorShown) }
         .background(WindowAccessor { window in
-            window.toolbar?.displayMode = .iconAndLabel
+            // The same window may have shown the welcome view with a transparent title bar.
+            window.titlebarAppearsTransparent = false
+            window.titleVisibility = .visible
+            window.styleMask.remove(.fullSizeContentView)
+            window.toolbar?.isVisible = true
+            window.isMovableByWindowBackground = false
+            if window.frame.width < 900 {
+                window.setContentSize(NSSize(width: 1280, height: 820))
+                window.center()
+            }
             window.toolbar?.allowsUserCustomization = true
             window.toolbar?.autosavesConfiguration = true
             window.setFrameAutosaveName("SpinelSvnProject-\(wc.rootPath)")
@@ -75,30 +98,17 @@ struct MainProjectView: View {
         }
     }
 
-    private var mainPerspective: some View {
-        VSplitView {
-            HSplitView {
-                Pane(title: L("Directories")) { DirectoryTreeView(wc: wc) }
-                    .frame(minWidth: 180, idealWidth: 240, maxWidth: 500)
-                Pane(title: L("Files"), accessory: { FileFilterField(wc: wc) }) { FileTableView(wc: wc) }
-                    .frame(minWidth: 400)
-            }
-            .frame(minHeight: 220, idealHeight: 420)
-            ChangesPane(wc: wc)
-                .frame(minHeight: 120, idealHeight: 260)
-            HSplitView {
-                OutputPane(wc: wc).frame(minWidth: 250)
-                TransactionsPane(wc: wc).frame(minWidth: 250)
-            }
-            .frame(minHeight: 90, idealHeight: 180)
-        }
+    private var subtitle: String {
+        guard let info = wc.info else { return wc.rootPath }
+        return "\(info.relativeURL)   r\(info.revision)"
     }
 }
 
 /// Toolbar items are individually identified so the user can rearrange them
-/// (right-click the toolbar, or Edit ▸ Configure Toolbar…).
+/// (right-click the toolbar, or Edit ▸ Configure Toolbar…). Only everyday actions show by default.
 struct MainToolbar: CustomizableToolbarContent {
     @ObservedObject var wc: WorkingCopyModel
+    @Binding var inspectorShown: Bool
 
     private var single: String? { wc.selectedFiles.count == 1 ? wc.selectedFiles.first : nil }
 
@@ -115,32 +125,37 @@ struct MainToolbar: CustomizableToolbarContent {
             }
             .help(L("Update the working copy from the repository"))
         }
-        ToolbarItem(id: "merge", placement: .navigation) {
-            Button { wc.sheet = .merge } label: { Label(L("Merge"), systemImage: "arrow.triangle.merge") }
-                .help(L("Merge changes into the working copy"))
-        }
         ToolbarItem(id: "commit", placement: .navigation) {
             Button { wc.commit(paths: nil) } label: { Label(L("Commit"), systemImage: "arrow.up.circle") }
                 .help(L("Commit local changes to the repository"))
+        }
+        ToolbarItem(id: "activity", placement: .navigation) {
+            if wc.busy {
+                ProgressView().controlSize(.small).help(wc.busyLabel)
+            }
+        }
+        ToolbarItem(id: "merge", showsByDefault: false) {
+            Button { wc.sheet = .merge } label: { Label(L("Merge"), systemImage: "arrow.triangle.merge") }
+                .help(L("Merge changes into the working copy"))
         }
         ToolbarItem(id: "add") {
             Button { wc.add() } label: { Label(L("Add"), systemImage: "plus.square") }
                 .help(L("Put files under version control"))
         }
-        ToolbarItem(id: "remove") {
-            Button { wc.remove() } label: { Label(L("Remove"), systemImage: "minus.square") }
-                .disabled(wc.selectedFiles.isEmpty)
-                .help(L("Remove files from version control"))
-        }
-        ToolbarItem(id: "move") {
-            Button { wc.move() } label: { Label(L("Move"), systemImage: "arrow.right.doc.on.clipboard") }
-                .disabled(wc.selectedFiles.isEmpty)
-        }
         ToolbarItem(id: "revert") {
             Button { wc.revert() } label: { Label(L("Revert"), systemImage: "arrow.uturn.backward") }
                 .help(L("Discard local changes"))
         }
-        ToolbarItem(id: "delete") {
+        ToolbarItem(id: "remove", showsByDefault: false) {
+            Button { wc.remove() } label: { Label(L("Remove"), systemImage: "minus.square") }
+                .disabled(wc.selectedFiles.isEmpty)
+                .help(L("Remove files from version control"))
+        }
+        ToolbarItem(id: "move", showsByDefault: false) {
+            Button { wc.move() } label: { Label(L("Move"), systemImage: "arrow.right.doc.on.clipboard") }
+                .disabled(wc.selectedFiles.isEmpty)
+        }
+        ToolbarItem(id: "delete", showsByDefault: false) {
             Button { wc.deletePhysically() } label: { Label(L("Delete"), systemImage: "trash") }
                 .disabled(wc.selectedFiles.isEmpty)
         }
@@ -155,13 +170,13 @@ struct MainToolbar: CustomizableToolbarContent {
             Button { wc.cleanUp() } label: { Label(L("Clean Up"), systemImage: "wrench.and.screwdriver") }
                 .help(L("Run svn cleanup on the working copy"))
         }
-        ToolbarItem(id: "changes") {
+        ToolbarItem(id: "changes", showsByDefault: false) {
             Button {
                 if let p = wc.targets.first { wc.windowRequest = .compare(p, .base) }
             } label: { Label(L("Changes"), systemImage: "rectangle.split.2x1") }
                 .disabled(wc.selectedFiles.isEmpty)
         }
-        ToolbarItem(id: "annotate") {
+        ToolbarItem(id: "annotate", showsByDefault: false) {
             Button {
                 if let p = wc.targets.first { wc.windowRequest = .annotate(p) }
             } label: { Label(L("Annotate"), systemImage: "text.line.first.and.arrowtriangle.forward") }
@@ -171,6 +186,7 @@ struct MainToolbar: CustomizableToolbarContent {
             Button {
                 wc.windowRequest = .log(wc.targets.first ?? "")
             } label: { Label(L("Log"), systemImage: "clock.arrow.circlepath") }
+                .help(L("Log"))
         }
         ToolbarItem(id: "graph") {
             Button { wc.windowRequest = .revisionGraph } label: { Label(L("Graph"), systemImage: "point.3.connected.trianglepath.dotted") }
@@ -190,90 +206,90 @@ struct MainToolbar: CustomizableToolbarContent {
             .pickerStyle(.segmented)
             .help(L("Switch between the main and the review perspective"))
         }
+        ToolbarItem(id: "inspector", placement: .primaryAction) {
+            Button { inspectorShown.toggle() } label: { Label(L("Inspector"), systemImage: "sidebar.right") }
+                .help(L("Show recent commits and activity"))
+        }
     }
 }
 
-// MARK: - Generic pane chrome
+// MARK: - Inspector (recent commits, activity)
 
-struct Pane<Content: View, Accessory: View>: View {
-    var title: String
-    var accessory: Accessory
-    var content: Content
+struct InspectorView: View {
+    @ObservedObject var wc: WorkingCopyModel
+    @SceneStorage("inspectorTab") private var tab = Tab.commits
 
-    init(title: String, @ViewBuilder accessory: () -> Accessory = { EmptyView() }, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.accessory = accessory()
-        self.content = content()
-    }
+    enum Tab: String { case commits, activity }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text(title).font(.headline)
-                Spacer()
-                accessory
+            Picker("", selection: $tab) {
+                Text(L("Recent Commits")).tag(Tab.commits)
+                Text(L("Activity")).tag(Tab.activity)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.bar)
-            Divider()
-            content
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(10)
+            switch tab {
+            case .commits: TransactionsPane(wc: wc)
+            case .activity: OutputPane(wc: wc)
+            }
         }
     }
 }
-
-struct FileFilterField: View {
-    @ObservedObject var wc: WorkingCopyModel
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(L("File Filter"), text: $wc.filterText)
-                .textFieldStyle(.plain)
-                .frame(width: 200)
-            if !wc.filterText.isEmpty {
-                Button { wc.filterText = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(RoundedRectangle(cornerRadius: 5).fill(Color(nsColor: .textBackgroundColor)))
-    }
-}
-
-// MARK: - Bottom panes
 
 struct OutputPane: View {
     @ObservedObject var wc: WorkingCopyModel
 
     var body: some View {
-        Pane(title: L("Output"), accessory: {
-            Button { wc.output.removeAll() } label: { Image(systemName: "trash") }
-                .buttonStyle(.borderless)
-                .help(L("Clear Output"))
-        }) {
-            ScrollViewReader { proxy in
-                List(wc.output) { line in
+        ScrollViewReader { proxy in
+            List(wc.output) { line in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: symbol(line.kind))
+                        .foregroundStyle(color(line.kind))
+                        .font(.caption)
                     Text(line.text)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(color(line.kind))
+                        .foregroundStyle(line.kind == .error ? Color.red : .primary)
                         .textSelection(.enabled)
-                        .id(line.id)
                 }
-                .listStyle(.plain)
-                .onChange(of: wc.output.last?.id) {
-                    if let last = wc.output.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                .id(line.id)
+            }
+            .listStyle(.plain)
+            .overlay {
+                if wc.output.isEmpty {
+                    ContentUnavailableView(L("No Activity"), systemImage: "terminal",
+                                           description: Text(L("svn commands run by SpinelSvn appear here.")))
                 }
             }
+            .onChange(of: wc.output.last?.id) {
+                if let last = wc.output.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                Button(L("Clear Output")) { wc.output.removeAll() }
+                    .controlSize(.small)
+                    .disabled(wc.output.isEmpty)
+            }
+            .padding(8)
+        }
+    }
+
+    private func symbol(_ k: OutputLine.Kind) -> String {
+        switch k {
+        case .command: return "chevron.right"
+        case .info: return "text.alignleft"
+        case .error: return "xmark.octagon.fill"
+        case .success: return "checkmark.circle.fill"
         }
     }
 
     private func color(_ k: OutputLine.Kind) -> Color {
         switch k {
-        case .command: return .accentColor
-        case .info: return .primary
+        case .command: return .secondary
+        case .info: return .secondary
         case .error: return .red
         case .success: return .green
         }
@@ -285,55 +301,42 @@ struct TransactionsPane: View {
     @Environment(\.openWindow) var openWindow
 
     var body: some View {
-        Pane(title: L("Transactions"), accessory: {
-            Button { Task { await wc.loadTransactions() } } label: { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.borderless)
-                .help(L("Refresh"))
-        }) {
-            List(wc.transactions) { e in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(verbatim: "r\(e.revision)").font(.caption.monospacedDigit().bold())
-                        Text(e.author).font(.caption)
-                        Spacer()
-                        Text(e.date.map(Fmt.short) ?? "").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text(e.message.lines.first ?? "").font(.caption).lineLimit(1)
+        List(wc.transactions) { e in
+            VStack(alignment: .leading, spacing: 3) {
+                Text(e.message.lines.first ?? "")
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text(verbatim: "r\(e.revision)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(e.author)
+                    Spacer()
+                    if let d = e.date { Text(d, style: .relative) }
                 }
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) {
-                    openWindow(id: "log", value: FileTarget(root: wc.rootPath, path: "", revision: e.revision))
-                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-            .listStyle(.plain)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                openWindow(id: "log", value: FileTarget(root: wc.rootPath, path: "", revision: e.revision))
+            }
+            .help(L("Double-click to open the log at this revision"))
         }
-    }
-}
-
-struct StatusBar: View {
-    @ObservedObject var wc: WorkingCopyModel
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if wc.busy {
-                ProgressView().controlSize(.small)
-                Text(wc.busyLabel + "…")
-            } else {
-                Text(L("Ready"))
-            }
-            Spacer()
-            if let info = wc.info {
-                Text(info.url).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                Text(verbatim: "r\(info.revision)").monospacedDigit()
-            }
-            if wc.remoteStateLoaded {
-                Image(systemName: "network").help(L("Remote state is shown"))
+        .listStyle(.plain)
+        .overlay {
+            if wc.transactions.isEmpty {
+                ContentUnavailableView(L("No Commits"), systemImage: "clock",
+                                       description: Text(L("Recent commits to this branch appear here.")))
             }
         }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(.bar)
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                Button(L("Refresh")) { Task { await wc.loadTransactions() } }.controlSize(.small)
+            }
+            .padding(8)
+        }
     }
 }
 

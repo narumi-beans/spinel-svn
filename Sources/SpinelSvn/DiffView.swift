@@ -12,17 +12,27 @@ struct DiffControls: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Picker("", selection: $mode) {
-                Text(L("Unified")).tag(DiffDisplayMode.unified)
-                Text(L("Side by Side")).tag(DiffDisplayMode.sideBySide)
+            Picker(L("Layout"), selection: $mode) {
+                Label(L("Unified"), systemImage: "rectangle.split.1x2").tag(DiffDisplayMode.unified)
+                    .help(L("Unified"))
+                Label(L("Side by Side"), systemImage: "rectangle.split.2x1").tag(DiffDisplayMode.sideBySide)
+                    .help(L("Side by Side"))
             }
             .pickerStyle(.segmented)
+            .labelStyle(.iconOnly)
             .labelsHidden()
             .fixedSize()
-            Toggle(L("Compact"), isOn: $compact).toggleStyle(.button)
-            Toggle(L("Ignore WS"), isOn: $ignoreWS).toggleStyle(.button)
-            Toggle(L("Ignore EOL"), isOn: $ignoreEOL).toggleStyle(.button)
-                .help(L("Ignore line-ending changes (CR/LF)"))
+            Menu {
+                Toggle(L("Compact"), isOn: $compact)
+                Toggle(L("Ignore WS"), isOn: $ignoreWS)
+                Toggle(L("Ignore EOL"), isOn: $ignoreEOL)
+            } label: {
+                Label(L("Display Options"), systemImage: "slider.horizontal.3")
+                    .labelStyle(.iconOnly)
+            }
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(L("Display Options"))
         }
         .controlSize(.small)
     }
@@ -65,7 +75,7 @@ struct DiffTextView: View {
                         }
                     }
                 }
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
                 .textSelection(.enabled)
             }
             .defaultScrollAnchor(.topLeading)
@@ -103,28 +113,35 @@ struct DiffTextView: View {
     }
 
     private func header(_ t: String) -> some View {
-        Text(t).font(.caption.bold()).padding(4).frame(maxWidth: .infinity, alignment: .leading)
+        Text(t)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 private extension DiffRow.Kind {
+    /// Removed text reads red on the base side, added text green on the working-copy side.
     var leftBackground: Color {
         switch self {
-        case .changed: return .blue.opacity(0.12)
-        case .deleted: return .red.opacity(0.15)
-        case .inserted: return .gray.opacity(0.08)
+        case .changed, .deleted: return .red.opacity(0.12)
+        case .inserted: return .secondary.opacity(0.05)
         default: return .clear
         }
     }
 
     var rightBackground: Color {
         switch self {
-        case .changed: return .blue.opacity(0.12)
-        case .inserted: return .green.opacity(0.15)
-        case .deleted: return .gray.opacity(0.08)
+        case .changed, .inserted: return .green.opacity(0.12)
+        case .deleted: return .secondary.opacity(0.05)
         default: return .clear
         }
     }
+
+    var leftBar: Color? { self == .changed || self == .deleted ? .red : nil }
+    var rightBar: Color? { self == .changed || self == .inserted ? .green : nil }
 }
 
 /// Shows a carriage return as "␍" so CRLF/LF differences are visible.
@@ -136,9 +153,10 @@ private struct LineNo: View {
     var n: Int?
     var body: some View {
         Text(n.map(String.init) ?? "")
-            .foregroundStyle(.secondary)
-            .frame(width: 44, alignment: .trailing)
-            .padding(.trailing, 6)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .frame(width: 40, alignment: .trailing)
+            .padding(.trailing, 8)
     }
 }
 
@@ -150,16 +168,17 @@ private struct SideBySideRow: View {
             GapRow(text: row.left ?? "")
         } else {
             HStack(spacing: 0) {
-                half(row.leftNumber, visible(row.left), row.kind.leftBackground)
+                half(row.leftNumber, visible(row.left), row.kind.leftBackground, row.kind.leftBar)
                 Divider()
-                half(row.rightNumber, visible(row.right), row.kind.rightBackground)
+                half(row.rightNumber, visible(row.right), row.kind.rightBackground, row.kind.rightBar)
             }
         }
     }
 
     /// Each side takes half of the width; long lines are truncated (full text in the tooltip).
-    private func half(_ n: Int?, _ text: String?, _ bg: Color) -> some View {
+    private func half(_ n: Int?, _ text: String?, _ bg: Color, _ bar: Color?) -> some View {
         HStack(spacing: 0) {
+            Rectangle().fill(bar ?? .clear).frame(width: 3)
             LineNo(n: n)
             Text(text ?? " ")
                 .lineLimit(1)
@@ -181,13 +200,16 @@ private struct UnifiedRow: View {
         } else {
             let marker = row.kind == .deleted ? "-" : (row.kind == .inserted ? "+" : " ")
             HStack(spacing: 0) {
+                Rectangle()
+                    .fill(row.kind == .deleted ? Color.red : row.kind == .inserted ? Color.green : .clear)
+                    .frame(width: 3)
                 LineNo(n: row.leftNumber)
                 LineNo(n: row.rightNumber)
                 Text(marker + " " + ((row.kind == .inserted ? visible(row.right) : visible(row.left)) ?? "")).fixedSize()
                 Spacer(minLength: 0)
             }
             .frame(minWidth: 900, alignment: .leading)
-            .background(row.kind == .deleted ? Color.red.opacity(0.15) : row.kind == .inserted ? Color.green.opacity(0.15) : .clear)
+            .background(row.kind == .deleted ? Color.red.opacity(0.12) : row.kind == .inserted ? Color.green.opacity(0.12) : .clear)
         }
     }
 }
@@ -219,7 +241,7 @@ struct PatchTextView: View {
                         .background(bg(line))
                 }
             }
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(.system(size: 12, design: .monospaced))
             .textSelection(.enabled)
         }
         .defaultScrollAnchor(.topLeading)
