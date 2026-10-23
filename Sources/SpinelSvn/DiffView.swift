@@ -4,11 +4,18 @@ enum DiffDisplayMode: String, CaseIterable {
     case unified, sideBySide
 }
 
+/// Where the changes view sits in the main window.
+enum DiffPlacement: String, CaseIterable {
+    case right, bottom
+}
+
 struct DiffControls: View {
     @Binding var mode: DiffDisplayMode
     @Binding var compact: Bool
     @Binding var ignoreWS: Bool
     @Binding var ignoreEOL: Bool
+    /// Only the main window's changes view can move; separate compare windows can't.
+    var showsPlacement = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -26,6 +33,10 @@ struct DiffControls: View {
                 Toggle(L("Compact"), isOn: $compact)
                 Toggle(L("Ignore WS"), isOn: $ignoreWS)
                 Toggle(L("Ignore EOL"), isOn: $ignoreEOL)
+                if showsPlacement {
+                    Divider()
+                    DiffPlacementPicker()
+                }
             } label: {
                 Label(L("Display Options"), systemImage: "slider.horizontal.3")
                     .labelStyle(.iconOnly)
@@ -35,6 +46,17 @@ struct DiffControls: View {
             .help(L("Display Options"))
         }
         .controlSize(.small)
+    }
+}
+
+struct DiffPlacementPicker: View {
+    @AppStorage("diffPlacement") private var placement = DiffPlacement.right
+
+    var body: some View {
+        Picker(L("Changes View Position"), selection: $placement) {
+            Label(L("Right of the File List"), systemImage: "rectangle.righthalf.inset.filled").tag(DiffPlacement.right)
+            Label(L("Below the File List"), systemImage: "rectangle.bottomhalf.inset.filled").tag(DiffPlacement.bottom)
+        }
     }
 }
 

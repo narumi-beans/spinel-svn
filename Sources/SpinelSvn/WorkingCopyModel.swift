@@ -28,7 +28,7 @@ final class DirNode: Identifiable, Hashable {
 
 /// Which modal dialog the project window should present.
 enum ProjectSheet: Identifiable {
-    case commit([String], pickedFiles: Bool)
+    case commit([String], picked: Set<String>)
     case input(InputRequest)
     case properties(String)
     case updateToRevision
@@ -37,6 +37,7 @@ enum ProjectSheet: Identifiable {
     case merge
     case tagBranch(isTag: Bool)
     case credentials
+    case excludes
     case confirm(ConfirmRequest)
 
     var id: String {
@@ -50,6 +51,7 @@ enum ProjectSheet: Identifiable {
         case .merge: return "merge"
         case let .tagBranch(t): return "tag-\(t)"
         case .credentials: return "credentials"
+        case .excludes: return "excludes"
         case let .confirm(r): return "confirm-\(r.title)"
         }
     }
@@ -96,15 +98,32 @@ final class WorkingCopyModel: ObservableObject {
         case changes            // every local change in the working copy
         case all                // every file in the working copy
         case folder(String)     // one directory (relative path, "" = root)
+        case folders([String])  // several directories selected together in the sidebar
+
+        var folderPath: String? { if case let .folder(p) = self { return p }; return nil }
     }
 
-    @Published var scope: Scope = .changes {
-        didSet { if scope != oldValue { selectedFiles.removeAll() } }
+    /// What is selected in the sidebar: one workspace item, or one or more folders.
+    @Published var sidebarSelection: Set<Scope> = [.changes] {
+        didSet { if sidebarSelection != oldValue { selectedFiles.removeAll() } }
     }
+
+    /// What the file list shows, derived from the sidebar selection.
+    var scope: Scope {
+        get {
+            if sidebarSelection.count == 1, let only = sidebarSelection.first { return only }
+            let folders = selectedFolders
+            return folders.isEmpty ? .changes : .folders(folders)
+        }
+        set { sidebarSelection = [newValue] }
+    }
+
+    /// Folders selected in the sidebar (relative paths), sorted.
+    var selectedFolders: [String] { sidebarSelection.compactMap(\.folderPath).sorted() }
 
     /// The directory that folder-relative actions (create directory, merge target, …) apply to.
     var selectedDir: String? {
-        get { if case let .folder(path) = scope { return path }; return "" }
+        get { selectedFolders.first ?? "" }
         set { scope = .folder(newValue ?? "") }
     }
     @Published var selectedFiles: Set<String> = []
@@ -156,6 +175,32 @@ final class WorkingCopyModel: ObservableObject {
 
     init(path: String) {
         root = URL(fileURLWithPath: path).standardizedFileURL
+        excludePatterns = ProjectExcludes.load(for: root.path)
+        excludeRules = ExcludeRules(excludePatterns)
+    }
+
+    /// App-only exclusions for this project (see ExcludeRules); not written to the repository.
+    @Published var excludePatterns: [String] = [] {
+        didSet {
+            guard excludePatterns != oldValue else { return }
+            ProjectExcludes.save(excludePatterns, for: rootPath)
+            excludeRules = ExcludeRules(excludePatterns)
+            rebuildTree()
+        }
+    }
+    private(set) var excludeRules = ExcludeRules([])
+
+    func isExcluded(_ e: StatusEntry) -> Bool { excludeRules.excludes(e.path, isDirectory: e.isDirectory) }
+
+    /// Adds root-anchored patterns that hide exactly the given items.
+    func exclude(_ paths: [String]) {
+        let new = paths.filter { !$0.isEmpty }.map { "/" + $0 + (entries[$0]?.isDirectory == true ? "/" : "") }
+        excludePatterns += new.filter { !excludePatterns.contains($0) }
+        selectedFiles.subtract(paths)
+        let stillShown = sidebarSelection.filter { scope in
+            scope.folderPath.map { !excludeRules.excludes($0, isDirectory: true) } ?? true
+        }
+        sidebarSelection = stillShown.isEmpty ? [.changes] : stillShown
     }
 
     // MARK: Running commands
@@ -222,7 +267,7 @@ final class WorkingCopyModel: ObservableObject {
         if let action = AppState.shared.pendingActions.removeValue(forKey: rootPath) {
             switch action {
             case .update: update()
-            case .commit: commit(paths: nil)
+            case .commit: commit()
             }
         }
     }
@@ -305,17 +350,17 @@ final class WorkingCopyModel: ObservableObject {
     func rebuildTree() {
         latestTreeBuild += 1
         let request = latestTreeBuild
-        let (root, name, entries, showIgnored) = (root, name, entries, showIgnored)
+        let (root, name, entries, showIgnored, rules) = (root, name, entries, showIgnored, excludeRules)
         Task {
             let tree = await Task.detached(priority: .userInitiated) {
-                Self.buildTree(root: root, name: name, entries: entries, showIgnored: showIgnored)
+                Self.buildTree(root: root, name: name, entries: entries, showIgnored: showIgnored, rules: rules)
             }.value
             if request == latestTreeBuild { dirTree = tree }
         }
     }
 
     nonisolated private static func buildTree(root: URL, name: String, entries: [String: StatusEntry],
-                                              showIgnored: Bool) -> DirNode {
+                                              showIgnored: Bool, rules: ExcludeRules) -> DirNode {
         let fm = FileManager.default
         let rootNode = DirNode(path: "", name: name)
         func absolute(_ rel: String) -> String {
@@ -332,6 +377,7 @@ final class WorkingCopyModel: ObservableObject {
                       isDir.boolValue else { continue }
                 let state = entries[childRel]?.effectiveState ?? .unversioned
                 if state == .ignored && !showIgnored { continue }
+                if rules.excludes(childRel, isDirectory: true) { continue }
                 let child = DirNode(path: childRel, name: item)
                 child.state = state
                 if state != .ignored && state != .unversioned { build(child, depth: depth + 1) }
@@ -342,7 +388,8 @@ final class WorkingCopyModel: ObservableObject {
         build(rootNode, depth: 0)
         // Mark directories that contain local modifications.
         var changedDirs = Set<String>()
-        for e in entries.values where e.effectiveState != .normal && e.effectiveState != .ignored {
+        for e in entries.values where e.effectiveState != .normal && e.effectiveState != .ignored
+            && !rules.excludes(e.path, isDirectory: e.isDirectory) {
             var d = e.directory
             while true {
                 changedDirs.insert(d)
@@ -363,7 +410,7 @@ final class WorkingCopyModel: ObservableObject {
     var visibleFiles: [StatusEntry] {
         let filter = filterText.lowercased()
         return entries.values.filter { e in
-            if e.path.isEmpty { return false }
+            if e.path.isEmpty || isExcluded(e) { return false }
             if e.isDirectory && e.item == .normal && e.props != "modified" { return false }
             let remoteChanged = e.remoteItem.map { $0 != .none && $0 != .normal } ?? false
             switch scope {
@@ -373,11 +420,9 @@ final class WorkingCopyModel: ObservableObject {
             case .all:
                 break
             case let .folder(dir):
-                if showSubdirFiles {
-                    if !dir.isEmpty && !(e.path.hasPrefix(dir + "/")) { return false }
-                } else if e.directory != dir {
-                    return false
-                }
+                if !inFolder(e, dir) { return false }
+            case let .folders(dirs):
+                if !dirs.contains(where: { inFolder(e, $0) }) { return false }
             }
             switch e.effectiveState {
             case .normal:
@@ -392,9 +437,13 @@ final class WorkingCopyModel: ObservableObject {
         }
     }
 
+    private func inFolder(_ e: StatusEntry, _ dir: String) -> Bool {
+        showSubdirFiles ? (dir.isEmpty || e.path.hasPrefix(dir + "/")) : e.directory == dir
+    }
+
     /// The file table body runs on every published change; re-sort only when its inputs change.
     func sortedVisibleFiles(_ order: [KeyPathComparator<StatusEntry>]) -> [StatusEntry] {
-        let key: [AnyHashable] = [entriesVersion, scope, filterText, showSubdirFiles, showUnchanged,
+        let key: [AnyHashable] = [entriesVersion, scope, filterText, excludePatterns, showSubdirFiles, showUnchanged,
                                   showUnversioned, showIgnored, showChangeSetFiles, showRemoteChanged, order]
         if let cache = sortedCache, cache.key == key { return cache.rows }
         let rows = visibleFiles.sorted(using: order)
@@ -404,14 +453,15 @@ final class WorkingCopyModel: ObservableObject {
 
     var committable: [StatusEntry] {
         entries.values.filter { $0.effectiveState.isCommittable || $0.effectiveState == .conflicted || $0.props == "modified" }
-            .filter { !$0.path.isEmpty || $0.props == "modified" }
+            .filter { (!$0.path.isEmpty || $0.props == "modified") && !isExcluded($0) }
             .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
     /// Selected files, or the selected directory when no file is selected.
     var targets: [String] {
         if !selectedFiles.isEmpty { return selectedFiles.sorted() }
-        return [selectedDir ?? ""]
+        let folders = selectedFolders
+        return folders.isEmpty ? [""] : folders
     }
 
     var selectedEntries: [StatusEntry] { selectedFiles.compactMap { entries[$0] } }
@@ -469,9 +519,27 @@ final class WorkingCopyModel: ObservableObject {
     }
 
     /// `pickedFiles`: the user chose these exact files, so unversioned ones among them start checked.
-    func commit(paths: [String]?, pickedFiles: Bool? = nil) {
-        let picked = pickedFiles ?? (paths != nil || !selectedFiles.isEmpty)
-        sheet = .commit(paths ?? (selectedFiles.isEmpty ? committable.map(\.path) : selectedFiles.sorted()), pickedFiles: picked)
+    /// Opens the commit sheet for exactly what is selected: the selected files (a selected folder
+    /// brings its contents), else the folders selected in the sidebar, else every local change.
+    func commit(files: Set<String>? = nil, folders: [String]? = nil) {
+        let files = files ?? selectedFiles
+        let folders = folders ?? selectedFolders
+        let picked: Set<String>
+        let roots: [String]
+        if !files.isEmpty {
+            picked = files
+            roots = files.filter { entries[$0]?.isDirectory == true }
+        } else if !folders.isEmpty && folders != [""] {
+            picked = Set(folders)
+            roots = folders
+        } else {
+            sheet = .commit(committable.map(\.path), picked: [])
+            return
+        }
+        let inScope = committable.filter { e in
+            picked.contains(e.path) || roots.contains { $0.isEmpty || e.path.hasPrefix($0 + "/") }
+        }
+        sheet = .commit(inScope.map(\.path), picked: picked)
     }
 
     func runCommit(paths: [String], message: String, keepChangelists: Bool, onSuccess: (() -> Void)? = nil) {

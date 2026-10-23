@@ -41,7 +41,7 @@ struct ProjectSheetView: View {
 
     var body: some View {
         switch sheet {
-        case let .commit(paths, picked): CommitSheet(wc: wc, initialPaths: Set(paths), pickedFiles: picked)
+        case let .commit(paths, picked): CommitSheet(wc: wc, paths: paths, picked: picked)
         case let .input(r): InputSheet(request: r)
         case let .confirm(r): ConfirmSheet(request: r)
         case let .properties(p): PropertiesSheet(wc: wc, path: p)
@@ -51,6 +51,7 @@ struct ProjectSheetView: View {
         case .merge: MergeSheet(wc: wc)
         case let .tagBranch(isTag): TagBranchSheet(wc: wc, isTag: isTag)
         case .credentials: CredentialsSheet(wc: wc)
+        case .excludes: ExcludesSheet(wc: wc)
         }
     }
 }
@@ -67,14 +68,18 @@ struct CommitSheet: View {
     @FocusState private var messageFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(wc: WorkingCopyModel, initialPaths: Set<String>, pickedFiles: Bool) {
+    /// The changes this commit may include: only what was selected when the sheet opened.
+    private let scope: Set<String>
+
+    init(wc: WorkingCopyModel, paths: [String], picked: Set<String>) {
         self.wc = wc
+        scope = Set(paths)
         // Unversioned files are offered but not pre-checked unless the user picked them.
-        _checked = State(initialValue: initialPaths.filter { pickedFiles || wc.entries[$0]?.item != .unversioned })
+        _checked = State(initialValue: Set(paths.filter { picked.contains($0) || wc.entries[$0]?.item != .unversioned }))
     }
 
     private var candidates: [StatusEntry] {
-        wc.committable.filter { showUnversioned || $0.item != .unversioned }
+        wc.committable.filter { scope.contains($0.path) && (showUnversioned || $0.item != .unversioned) }
     }
 
     /// Only files the user can see in the list are counted and committed.
@@ -360,6 +365,61 @@ struct CredentialsSheet: View {
             }
         }
         .onAppear { user = wc.credentials?.username ?? NSUserName() }
+    }
+}
+
+// MARK: - App-only exclusions
+
+struct ExcludesSheet: View {
+    @ObservedObject var wc: WorkingCopyModel
+    @State private var text: String
+    @Environment(\.dismiss) private var dismiss
+
+    init(wc: WorkingCopyModel) {
+        self.wc = wc
+        _text = State(initialValue: wc.excludePatterns.joined(separator: "\n"))
+    }
+
+    private var patterns: [String] { text.components(separatedBy: "\n") }
+
+    /// How many items the edited patterns would hide, so the effect is visible before saving.
+    private var hiddenCount: Int {
+        let rules = ExcludeRules(patterns)
+        return wc.entries.values.filter { rules.excludes($0.path, isDirectory: $0.isDirectory) }.count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(L("Hidden Files")).font(.title2.weight(.semibold))
+            Text(L("Files and folders matching these patterns are hidden from SpinelSvn and never included in a commit. The setting is stored in SpinelSvn for this project only; nothing is written to the repository (unlike svn:ignore)."))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $text)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(height: 170)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("One pattern per line. Lines starting with # are comments.")).font(.caption)
+                Text(L("*.log  hides every .log file;  build/  hides every folder named build;  /app/tmp/  hides that folder only.")).font(.caption.monospaced())
+            }
+            .foregroundStyle(.secondary)
+            HStack {
+                Text(String(format: L("%d item(s) hidden"), hiddenCount))
+                    .font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button(L("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L("Save")) {
+                    wc.excludePatterns = patterns.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 560)
     }
 }
 

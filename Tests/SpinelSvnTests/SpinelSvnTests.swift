@@ -309,3 +309,99 @@ final class FollowUpFixTests: XCTestCase {
         XCTAssertNil(store.lookup(args: ["log", "/elsewhere/f"], cwd: nil))
     }
 }
+
+@MainActor
+final class CommitScopeTests: XCTestCase {
+    private func entry(_ path: String, _ item: ItemState, dir: Bool = false) -> StatusEntry {
+        StatusEntry(path: path, item: item, props: "none", revision: 1, committedRevision: 1, author: nil,
+                    copied: false, treeConflicted: false, locked: false, changelist: nil, remoteItem: nil,
+                    remoteProps: nil, copyFrom: nil, isDirectory: dir,
+                    name: (path as NSString).lastPathComponent, directory: (path as NSString).deletingLastPathComponent)
+    }
+
+    private func model() -> WorkingCopyModel {
+        let wc = WorkingCopyModel(path: "/tmp/wc")
+        for e in [entry("top.txt", .modified), entry("app", .normal, dir: true), entry("app/a.rb", .modified),
+                  entry("app/new.rb", .unversioned), entry("docs", .normal, dir: true), entry("docs/d.md", .modified),
+                  entry("lib", .unversioned, dir: true)] {    // svn lists an unversioned folder, not its contents
+            wc.entries[e.path] = e
+        }
+        return wc
+    }
+
+    private func sheetContents(_ wc: WorkingCopyModel) -> ([String], Set<String>) {
+        guard case let .commit(paths, picked)? = wc.sheet else { XCTFail("no commit sheet"); return ([], []) }
+        return (paths.sorted(), picked)
+    }
+
+    func testSelectedFilesOnly() {
+        let wc = model()
+        wc.selectedFiles = ["app/a.rb"]
+        wc.commit()
+        XCTAssertEqual(sheetContents(wc).0, ["app/a.rb"])
+    }
+
+    func testSelectedFoldersOnly() {
+        let wc = model()
+        wc.sidebarSelection = [.folder("app")]
+        wc.commit()
+        XCTAssertEqual(sheetContents(wc).0, ["app/a.rb", "app/new.rb"])
+        wc.sidebarSelection = [.folder("app"), .folder("docs")]
+        wc.commit()
+        XCTAssertEqual(sheetContents(wc).0, ["app/a.rb", "app/new.rb", "docs/d.md"])
+    }
+
+    func testNothingSelectedCoversEverything() {
+        let wc = model()
+        wc.commit()
+        XCTAssertEqual(sheetContents(wc).0, ["app/a.rb", "app/new.rb", "docs/d.md", "lib", "top.txt"])
+        XCTAssertEqual(sheetContents(wc).1, [])
+    }
+
+    func testSelectedUnversionedFolderIsPicked() {
+        let wc = model()
+        wc.selectedFiles = ["lib"]
+        wc.commit()
+        XCTAssertEqual(sheetContents(wc).0, ["lib"])
+        XCTAssertEqual(sheetContents(wc).1, ["lib"])
+    }
+
+    func testMultipleFoldersListTheirFiles() {
+        let wc = model()
+        wc.sidebarSelection = [.folder("app"), .folder("docs")]
+        XCTAssertEqual(wc.visibleFiles.map(\.path).sorted(), ["app/a.rb", "app/new.rb", "docs/d.md"])
+        XCTAssertEqual(wc.targets, ["app", "docs"])
+    }
+}
+
+final class ExcludeRulesTests: XCTestCase {
+    func testNamePatternsMatchAtAnyDepth() {
+        let r = ExcludeRules(["*.log", ".env"])
+        XCTAssertTrue(r.excludes("debug.log", isDirectory: false))
+        XCTAssertTrue(r.excludes("app/tmp/server.log", isDirectory: false))
+        XCTAssertTrue(r.excludes("config/.env", isDirectory: false))
+        XCTAssertFalse(r.excludes("app/logger.rb", isDirectory: false))
+    }
+
+    func testFolderPatternHidesFolderAndContentsOnly() {
+        let r = ExcludeRules(["build/"])
+        XCTAssertTrue(r.excludes("build", isDirectory: true))
+        XCTAssertTrue(r.excludes("build/out/a.o", isDirectory: false))
+        XCTAssertTrue(r.excludes("pkg/build/x", isDirectory: false))
+        XCTAssertFalse(r.excludes("build", isDirectory: false))          // a file named build stays
+        XCTAssertFalse(r.excludes("rebuild/x", isDirectory: false))
+    }
+
+    func testRootedPathPatterns() {
+        let r = ExcludeRules(["app/tmp/*.txt", "/docs"])
+        XCTAssertTrue(r.excludes("app/tmp/a.txt", isDirectory: false))
+        XCTAssertFalse(r.excludes("other/app/tmp/a.txt", isDirectory: false))
+        XCTAssertFalse(r.excludes("app/tmp/sub/a.txt", isDirectory: false))  // * does not cross folders
+        XCTAssertTrue(r.excludes("docs/guide.md", isDirectory: false))
+        XCTAssertFalse(r.excludes("x/docs/guide.md", isDirectory: false))  // a leading slash anchors to the root
+    }
+
+    func testBlankAndCommentLinesAreIgnored() {
+        XCTAssertTrue(ExcludeRules(["", "  ", "# note"]).isEmpty)
+    }
+}

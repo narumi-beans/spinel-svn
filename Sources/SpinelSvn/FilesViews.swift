@@ -27,7 +27,7 @@ struct SidebarView: View {
     @State private var expanded: Set<String> = [""]
 
     var body: some View {
-        List(selection: Binding(get: { wc.scope }, set: { if let s = $0 { wc.scope = s } })) {
+        List(selection: Binding(get: { wc.sidebarSelection }, set: select)) {
             Section(L("Workspace")) {
                 Label(L("Local Changes"), systemImage: "square.and.pencil")
                     .badge(wc.committable.count)
@@ -44,6 +44,18 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// Folders can be selected together (⌘/⇧-click); a workspace item always stands alone.
+    private func select(_ new: Set<WorkingCopyModel.Scope>) {
+        guard !new.isEmpty else { return }
+        let added = new.subtracting(wc.sidebarSelection)
+        if let workspace = added.first(where: { $0.folderPath == nil }) {
+            wc.sidebarSelection = [workspace]
+        } else {
+            let folders = new.filter { $0.folderPath != nil }
+            wc.sidebarSelection = folders.isEmpty ? new : folders
+        }
     }
 }
 
@@ -91,11 +103,16 @@ private struct DirectoryMenu: View {
 
     var body: some View {
         Button(L("Update")) { wc.selectedDir = path; wc.selectedFiles = []; wc.update() }
-        Button(L("Commit…")) { wc.commit(paths: wc.committable.filter { path.isEmpty || $0.path == path || $0.path.hasPrefix(path + "/") }.map(\.path), pickedFiles: false) }
+        Button(L("Commit…")) {
+            // Right-clicking one of several selected folders commits all of them.
+            wc.commit(files: [], folders: wc.selectedFolders.contains(path) ? wc.selectedFolders : [path])
+        }
         Divider()
         Button(L("Create Directory…")) { wc.selectedDir = path; wc.createDirectory() }
         Button(L("Log…")) { wc.windowRequest = .log(path) }
         Button(L("Edit Properties…")) { wc.sheet = .properties(path) }
+        Button(L("Hide from SpinelSvn")) { wc.exclude([path]) }
+            .disabled(path.isEmpty)
         Divider()
         Button(L("Reveal in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: wc.absolute(path))]) }
         Button(L("Open in Terminal")) { wc.selectedDir = path; wc.openInTerminal() }
@@ -247,7 +264,7 @@ private struct FileMenu: View {
         Button(L("Compare with Previous"), action: on { wc.windowRequest = .compare(first, .previous) })
         Divider()
         Button(L("Update"), action: on { wc.update() })
-        Button(L("Commit…"), action: on { wc.commit(paths: ids.sorted()) })
+        Button(L("Commit…"), action: on { wc.commit() })
         Button(L("Add"), action: on { wc.add() })
         Button(L("Remove…"), action: on { wc.remove() })
         Button(L("Revert…"), action: on { wc.revert() })
@@ -260,6 +277,7 @@ private struct FileMenu: View {
         Button(L("Move…"), action: on { wc.move() })
         Button(L("Copy…"), action: on { wc.copy() })
         Button(L("Move to Change Set…"), action: on { wc.moveToChangeSet() })
+        Button(L("Hide from SpinelSvn"), action: on { wc.exclude(ids.sorted()) })
         Divider()
         Button(L("Log…"), action: on { wc.windowRequest = .log(first) })
         Button(L("Annotate…"), action: on { wc.windowRequest = .annotate(first) })
@@ -332,7 +350,8 @@ struct ChangesPane: View {
             .layoutPriority(1)
             StatePill(entry: e).fixedSize()
             Spacer(minLength: 12)
-            DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL)
+            DiffControls(mode: $mode, compact: $compact, ignoreWS: $ignoreWS, ignoreEOL: $ignoreEOL,
+                         showsPlacement: true)
                 .fixedSize()
         }
         .padding(.horizontal, 14)

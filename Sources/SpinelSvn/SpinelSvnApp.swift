@@ -54,6 +54,9 @@ struct SpinelSvnApp: App {
         }
         .defaultSize(width: 1100, height: 800)
 
+        Window(L("SpinelSvn Help"), id: "help") { HelpWindow() }
+            .defaultSize(width: 900, height: 620)
+
         Window(L("Manage Log Caches"), id: "logcaches") { LogCacheManager() }
             .defaultSize(width: 760, height: 360)
 
@@ -93,6 +96,7 @@ struct MainCommands: Commands {
             Button(L("Open or Manage Projects…")) { openWindow(id: "project") }
                 .keyboardShortcut("o")
             Divider()
+            Button(L("Hidden Files…")) { wc?.sheet = .excludes }.disabled(noWC)
             Button(L("Manage Log Caches…")) { openWindow(id: "logcaches") }
             Divider()
             Button(L("Remove Working Copy from Project List")) {
@@ -126,6 +130,7 @@ struct MainCommands: Commands {
             if let wc {
                 ViewToggles(wc: wc)
             }
+            DiffPlacementPicker()
             Divider()
         }
 
@@ -138,7 +143,7 @@ struct MainCommands: Commands {
             Button(L("Merge…")) { wc?.sheet = .merge }.disabled(noWC)
             Button(L("Apply Patch…")) { wc?.applyPatch() }.disabled(noWC)
             Divider()
-            Button(L("Commit…")) { wc?.commit(paths: nil) }.keyboardShortcut("k").disabled(noWC)
+            Button(L("Commit…")) { wc?.commit() }.keyboardShortcut("k").disabled(noWC)
             Button(L("Add")) { wc?.add() }.keyboardShortcut("+", modifiers: [.command, .option]).disabled(noWC)
             Button(L("Remove…")) { wc?.remove() }.disabled(noSel)
             Button(L("Ignore…")) { wc?.ignore() }.disabled(noSel)
@@ -215,6 +220,11 @@ struct MainCommands: Commands {
             Button(L("Review Perspective")) { wc?.perspective = .review }
                 .keyboardShortcut("2", modifiers: [.command, .option]).disabled(noWC)
             Divider()
+        }
+
+        CommandGroup(replacing: .help) {
+            Button(L("SpinelSvn Help")) { openWindow(id: "help") }
+                .keyboardShortcut("?", modifiers: .command)
         }
 
         CommandMenu(L("Tools")) {

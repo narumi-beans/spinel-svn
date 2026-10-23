@@ -31,6 +31,7 @@ struct MainProjectView: View {
     @StateObject private var wc: WorkingCopyModel
     @Environment(\.openWindow) var openWindow
     @SceneStorage("inspectorShown") private var inspectorShown = false
+    @AppStorage("diffPlacement") private var placement = DiffPlacement.right
 
     init(path: String) {
         _wc = StateObject(wrappedValue: WorkingCopyModel(path: path))
@@ -40,10 +41,20 @@ struct MainProjectView: View {
         Group {
             if wc.perspective == .review {
                 ReviewView(wc: wc)
+            } else if placement == .bottom {
+                NavigationSplitView {
+                    sidebar
+                } detail: {
+                    VSplitView {
+                        FileTableView(wc: wc)
+                            .frame(minHeight: 140, idealHeight: 300)
+                        ChangesPane(wc: wc)
+                            .frame(minHeight: 180, idealHeight: 380)
+                    }
+                }
             } else {
                 NavigationSplitView {
-                    SidebarView(wc: wc)
-                        .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 360)
+                    sidebar
                 } content: {
                     FileTableView(wc: wc)
                         .navigationSplitViewColumnWidth(min: 300, ideal: 380)
@@ -98,6 +109,11 @@ struct MainProjectView: View {
         }
     }
 
+    private var sidebar: some View {
+        SidebarView(wc: wc)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 360)
+    }
+
     private var subtitle: String {
         guard let info = wc.info else { return wc.rootPath }
         return "\(info.relativeURL)   r\(info.revision)"
@@ -126,7 +142,7 @@ struct MainToolbar: CustomizableToolbarContent {
             .help(L("Update the working copy from the repository"))
         }
         ToolbarItem(id: "commit", placement: .navigation) {
-            Button { wc.commit(paths: nil) } label: { Label(L("Commit"), systemImage: "arrow.up.circle") }
+            Button { wc.commit() } label: { Label(L("Commit"), systemImage: "arrow.up.circle") }
                 .help(L("Commit local changes to the repository"))
         }
         ToolbarItem(id: "activity", placement: .navigation) {
